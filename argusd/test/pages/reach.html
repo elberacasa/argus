@@ -18,6 +18,27 @@
 <!-- Appears after a delay: a wait, not a sleep. -->
 <button id="slow">Load data</button>
 
+<!-- A field half under a grey box, in a scroll box, that clears itself unless
+     its centre is visible (the UI Testing Playground "overlapped" trap). -->
+<div style="position: relative">
+  <div id="box" style="overflow-y: scroll; height: 100px; width: 320px">
+    <input id="first" placeholder="First" style="display: block; box-sizing: border-box; height: 20px; margin: 0 0 30px">
+    <input id="last" placeholder="Last" style="display: block; box-sizing: border-box; height: 20px; margin: 0 0 30px">
+    <div style="height: 200px"></div>
+  </div>
+  <!-- covers y 57-63 of the box: the Last field's centre (60), not its edges -->
+  <div style="position: absolute; top: 57px; left: 0; width: 300px; height: 6px; background: #ccc"></div>
+</div>
+
+<!-- A button scrolled out of sight inside its own container. -->
+<div style="overflow: auto; height: 60px; width: 300px">
+  <div style="height: 240px"></div>
+  <button onclick="document.getElementById('log').textContent='Clicked in the scroll box.'">Scrolled away</button>
+</div>
+
+<!-- A field the page fills by itself. -->
+<input id="token" aria-label="Token"> <button onclick="document.getElementById('token').value='abc-123'">Generate token</button>
+
 <div class="tall"></div>
 <button id="far" onclick="document.getElementById('log').textContent='Clicked far below.'">Far below</button>
 
@@ -33,6 +54,11 @@
       root.innerHTML = '<button>Shadow button</button><p style="color:#c8c8c8;margin:4px 0">Faint text inside a shadow root</p>';
       root.querySelector("button").onclick = () => { document.getElementById("log").textContent = "Clicked in shadow."; };
     }
+  });
+  const last = document.getElementById("last");
+  last.addEventListener("input", () => {
+    const r = last.getBoundingClientRect();
+    if (document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2) !== last) last.value = "";
   });
   document.getElementById("slow").onclick = () => {
     setTimeout(() => {

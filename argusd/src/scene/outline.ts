@@ -6,7 +6,7 @@
 // Actions are hit-tested, so a covered button says so in the outline itself.
 
 import type { Page } from "../cdp/pipe";
-import type { Scene, SceneElement } from "./snapshot";
+import { hitTest, type Scene, type SceneElement } from "./snapshot";
 
 const LANDMARKS = new Set(["main", "navigation", "banner", "contentinfo", "complementary", "form", "dialog", "alertdialog", "search", "region"]);
 const FIELDS = new Set(["textbox", "searchbox", "combobox", "checkbox", "radio", "slider", "file", "spinbutton", "switch"]);
@@ -17,17 +17,22 @@ export async function outline(page: Page, scene: Scene, budget = 250): Promise<{
   const inView = (e: SceneElement) => !!e.bounds && e.bounds.y < scene.viewport.h && e.bounds.y + e.bounds.h > 0;
 
   const coveredBy = new Map<number, SceneElement | null>();
+  const clipped = new Set<number>();
   const actions = visible.filter((e) => ACTIONS.has(e.role) || FIELDS.has(e.role));
   // Hit-test what is on screen, up to a limit: about a millisecond each.
   for (const e of actions.filter(inView).slice(0, 24)) {
     const b = e.bounds!;
     const x = Math.round(Math.max(0, b.x) + Math.min(b.w, scene.viewport.w - Math.max(0, b.x)) / 2);
     const y = Math.round(Math.max(0, b.y) + Math.min(b.h, scene.viewport.h - Math.max(0, b.y)) / 2);
-    try {
-      const { backendNodeId } = await page.send("DOM.getNodeForLocation", { x, y, ignorePointerEventsNone: true });
-      if (backendNodeId !== e.backendNodeId && !scene.ancestors(backendNodeId).includes(e.backendNodeId))
-        coveredBy.set(e.backendNodeId, scene.describe(backendNodeId));
-    } catch { /* no answer for this point */ }
+    {
+      const backendNodeId = await hitTest(page, scene, x, y);
+      if (backendNodeId === null) continue;
+      if (backendNodeId === e.backendNodeId || scene.ancestors(backendNodeId).includes(e.backendNodeId)) continue;
+      // An ancestor painting at the element's centre means it is clipped by a
+      // scroll container, not covered by something else.
+      if (scene.ancestors(e.backendNodeId).includes(backendNodeId)) clipped.add(e.backendNodeId);
+      else coveredBy.set(e.backendNodeId, scene.describe(backendNodeId));
+    }
   }
 
   const tag = (e: SceneElement) => {
@@ -36,6 +41,7 @@ export async function outline(page: Page, scene: Scene, budget = 250): Promise<{
     if (e.state.includes("checked")) notes.push("checked");
     if (e.state.includes("required")) notes.push("required");
     if (!inView(e)) notes.push("below");
+    if (clipped.has(e.backendNodeId)) notes.push("scrolled out of its container");
     const blocker = coveredBy.get(e.backendNodeId);
     if (coveredBy.has(e.backendNodeId)) notes.push(`covered by ${blocker ? blocker.ref + " " + (blocker.name || blocker.selector) : "another element"}`);
     return notes.length ? ` [${notes.join(", ")}]` : "";

@@ -7,8 +7,11 @@
 // frames -- with shadow-root content included, layout for each node, and
 // Chromium's own judgement of what is clickable. The Scene is built from that.
 //
-// Coordinates are viewport CSS pixels -- what Input.dispatchMouseEvent and
-// DOM.getNodeForLocation take -- so a bound can be clicked or hit-tested as is.
+// Coordinates are viewport CSS pixels, what Input.dispatchMouseEvent takes.
+// DOM.getNodeForLocation does not take viewport pixels: it takes document
+// coordinates, so a hit test on a scrolled page must add the scroll offset
+// (measured on Chromium 152: at scrollY 38, (10,125) named the row 38px above
+// the one under the pointer). Always hit-test through hitTest().
 
 import type { Protocol } from "devtools-protocol";
 import type { Page } from "../cdp/pipe";
@@ -38,6 +41,9 @@ export interface SceneElement {
   backendNodeId: number;
 }
 
+/** A form field's current value, as the browser holds it (not the value attribute). */
+export interface FieldValue { backendNodeId: number; label: string; value: string }
+
 /** A block of visible text: every text node under one element, joined. */
 export interface TextBlock { text: string; backendNodeId: number; bounds: Rect | null }
 
@@ -46,8 +52,11 @@ export interface Scene {
   title: string;
   documents: number;
   viewport: { w: number; h: number };
+  /** Page scroll at capture, in CSS pixels. */
+  scroll: { x: number; y: number };
   elements: SceneElement[];
   texts: TextBlock[];
+  fields: FieldValue[];
   /** Backend node ids from a node up to the top document, crossing frames and shadow roots. */
   ancestors(backendNodeId: number): number[];
   /** The element for a backend node: its own entry, or a described generic one. */
@@ -81,12 +90,25 @@ export async function captureScene(page: Page): Promise<Scene> {
     page.send("Page.getLayoutMetrics"),
   ]);
   const vv = metrics.cssVisualViewport;
-  return buildScene(snap, { w: Math.round(vv.clientWidth), h: Math.round(vv.clientHeight) });
+  return buildScene(snap, { w: Math.round(vv.clientWidth), h: Math.round(vv.clientHeight) }, { x: vv.pageX, y: vv.pageY });
+}
+
+/** The node a real pointer at viewport (x, y) would hit, or null when nothing answers. */
+export async function hitTest(page: Page, scene: Scene, x: number, y: number): Promise<number | null> {
+  try {
+    const { backendNodeId } = await page.send("DOM.getNodeForLocation", {
+      x: Math.round(x + scene.scroll.x), y: Math.round(y + scene.scroll.y), includeUserAgentShadowDOM: false, ignorePointerEventsNone: true,
+    });
+    return backendNodeId;
+  } catch {
+    return null;
+  }
 }
 
 export function buildScene(
   snap: Protocol.DOMSnapshot.CaptureSnapshotResponse,
   viewport: { w: number; h: number } = { w: 0, h: 0 },
+  scroll: { x: number; y: number } = { x: 0, y: 0 },
 ): Scene {
   const { strings, documents } = snap;
   const str = (i: number | undefined) => (i === undefined || i < 0 ? "" : strings[i] ?? "");
@@ -138,6 +160,7 @@ export function buildScene(
 
   const elements: SceneElement[] = [];
   const texts: TextBlock[] = [];
+  const fields: FieldValue[] = [];
   const byBackend = new Map<number, { doc: number; node: number }>();
   const parentsOf: number[][] = [];
   const describers: Array<(node: number) => SceneElement> = [];
@@ -284,7 +307,14 @@ export function buildScene(
       const isInput = tag === "INPUT" && a.get("type") !== "hidden";
       const interesting = clickable.has(n) || isLink || isInput || tag in IMPLICIT_ROLE || a.has("role")
         || (a.has("tabindex") && a.get("tabindex") !== "-1") || a.has("contenteditable");
-      if (interesting) elements.push(make(n));
+      if (!interesting) return;
+      const element = make(n);
+      elements.push(element);
+      const type = a.get("type") ?? "text";
+      if ((tag === "INPUT" && !["submit", "button", "reset", "image", "file", "hidden"].includes(type)) || tag === "TEXTAREA") {
+        const value = ["checkbox", "radio"].includes(type) ? (checked.has(n) ? "checked" : "unchecked") : inputValue.get(n) ?? "";
+        fields.push({ backendNodeId: element.backendNodeId, label: `${element.role}:${element.name || element.selector}`, value });
+      }
     });
 
     // Visible text, grouped by the element that holds it, so a paragraph
@@ -347,8 +377,10 @@ export function buildScene(
     title: str(top?.title),
     documents: documents.length,
     viewport,
+    scroll,
     elements,
     texts,
+    fields,
     ancestors,
     describe,
   };

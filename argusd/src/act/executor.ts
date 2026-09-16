@@ -12,7 +12,7 @@ import type { Probe, Mark } from "../lane/probe";
 import type {
   ActResult, Diagnosis, Element, ElementStateName, Expectation, FailedCondition, Observation, Step, StepResult, Target, Verb,
 } from "../protocol/types";
-import { captureScene, type Scene, type SceneElement } from "../scene/snapshot";
+import { captureScene, hitTest, type Scene, type SceneElement } from "../scene/snapshot";
 import { describeTarget, label, locate, publicElement, type Match } from "./locate";
 
 export interface LaneContext {
@@ -119,6 +119,7 @@ async function runStep(lane: LaneContext, step: Step, i: number, noErrorsByDefau
 
   const after = await captureScene(lane.page);
   Object.assign(observation, describeChange(before, after, lane.probe.since(mark, LIST_LIMIT)));
+  // A verb's own report (e.g. the files set by upload) wins over the scene diff.
   if (performed.fields?.length) observation.fields = performed.fields;
   observation.ms = Math.round(performance.now() - t0);
 
@@ -187,7 +188,13 @@ async function perform(lane: LaneContext, step: Step, verb: Verb, scene: Scene):
       if (to !== text && !(to ?? "").includes(text)) {
         return {
           ok: false, target: reached.element, match: reached.match, fields, expectsEffect: false,
-          diagnosis: { reason: "expectation-failed", hint: `Typed into ${label(reached.element)} but it holds "${to ?? ""}".`, failed: [{ condition: `field holds "${text}"`, actual: to }] },
+          diagnosis: {
+            reason: "expectation-failed",
+            hint: `Typed into ${label(reached.element)} but it holds "${to ?? ""}".` + (reached.centreCoveredBy !== undefined
+              ? ` Its centre is covered by ${reached.centreCoveredBy ? label(reached.centreCoveredBy) : "another element"}; pages often reject input they cannot see. Scroll it clear ({"scroll": target}) and type again.`
+              : ""),
+            failed: [{ condition: `field holds "${text}"`, actual: to }],
+          },
         };
       }
       return { ok: true, target: reached.element, match: reached.match, fields, expectsEffect: false };
@@ -243,8 +250,31 @@ async function perform(lane: LaneContext, step: Step, verb: Verb, scene: Scene):
       }
       const found = locate(scene, value as Target);
       if (!found.ok) return { ok: false, expectsEffect: false, diagnosis: found.diagnosis };
-      await page.send("DOM.scrollIntoViewIfNeeded", { backendNodeId: found.element.backendNodeId });
-      return { ok: true, target: found.element, match: found.match, expectsEffect: false };
+      // Scroll until the element's centre is visible and uncovered, not merely
+      // "in view": try the least movement first, then each alignment.
+      const node = found.element.backendNodeId;
+      let lastCover: SceneElement | null = null;
+      for (const block of [null, "center", "start", "end"]) {
+        if (block === null) await page.send("DOM.scrollIntoViewIfNeeded", { backendNodeId: node });
+        else await callOn(page, node, "function (block) { this.scrollIntoView({ block, inline: 'nearest' }) }", [block]);
+        const now = await captureScene(page);
+        const e = now.elements.find((x) => x.backendNodeId === node);
+        if (!e?.bounds) break;
+        const cx = Math.round(e.bounds.x + e.bounds.w / 2), cy = Math.round(e.bounds.y + e.bounds.h / 2);
+        if (cx < 0 || cy < 0 || cx >= now.viewport.w || cy >= now.viewport.h) continue;
+        const backendNodeId = await hitTest(page, now, cx, cy);
+        if (backendNodeId === null) continue;
+        if (backendNodeId === node || now.ancestors(backendNodeId).includes(node)) return { ok: true, target: e, match: found.match, expectsEffect: false };
+        lastCover = coveringElement(now, backendNodeId);
+      }
+      return {
+        ok: false, target: found.element, match: found.match, expectsEffect: false,
+        diagnosis: {
+          reason: "covered",
+          hint: `Scrolled ${label(found.element)} every way, and its centre stays covered${lastCover ? ` by ${label(lastCover)}` : ""}.`,
+          blocker: lastCover ? publicElement(lastCover) : { ref: found.element.ref, role: "generic", name: "" },
+        },
+      };
     }
 
     case "dialog": {
@@ -277,7 +307,7 @@ export async function setViewport(page: Page, vp: { w: number; h: number; mobile
 // ---- reachability ------------------------------------------------------------
 
 type Reached =
-  | { ok: true; element: SceneElement; match: Match; point: { x: number; y: number } }
+  | { ok: true; element: SceneElement; match: Match; point: { x: number; y: number }; centreCoveredBy?: SceneElement | null }
   | { ok: false; diagnosis: Diagnosis; target?: SceneElement; match?: Match };
 
 /**
@@ -311,34 +341,72 @@ export async function reach(lane: LaneContext, scene: Scene, target: Target, nee
     scene = again;
   }
 
-  const b = element.bounds!;
-  const vx0 = Math.max(0, b.x), vy0 = Math.max(0, b.y);
-  const vx1 = Math.min(scene.viewport.w, b.x + b.w), vy1 = Math.min(scene.viewport.h, b.y + b.h);
-  const point = { x: Math.round((vx0 + vx1) / 2), y: Math.round((vy0 + vy1) / 2) };
+  // Hit-test where the click will land. A hit on one of the element's own
+  // ancestors means the element is clipped by a scroll container at that point
+  // (the ancestor paints there, the element does not): scroll it into view and
+  // test again, as a person would. Anything else on top is a real cover.
+  for (let attempt = 0; ; attempt++) {
+    const b = element.bounds!;
+    const vx0 = Math.max(0, b.x), vy0 = Math.max(0, b.y);
+    const vx1 = Math.min(scene.viewport.w, b.x + b.w), vy1 = Math.min(scene.viewport.h, b.y + b.h);
+    // The centre first; if something covers it, the parts of the element a
+    // person can still see. A partly covered field is clickable where it shows.
+    const fractions: Array<[number, number]> = [[0.5, 0.5], [0.2, 0.5], [0.8, 0.5], [0.5, 0.25], [0.5, 0.75], [0.2, 0.25], [0.8, 0.25], [0.2, 0.75], [0.8, 0.75]];
+    const points = fractions.map(([fx, fy]) => ({ x: Math.round(vx0 + (vx1 - vx0) * fx), y: Math.round(vy0 + (vy1 - vy0) * fy) }));
+    const point = points[0]!;
 
-  let hit: number | undefined;
-  try {
-    const r = await lane.page.send("DOM.getNodeForLocation", { x: point.x, y: point.y, includeUserAgentShadowDOM: false, ignorePointerEventsNone: true });
-    hit = r.backendNodeId;
-  } catch {
+    const hit = await hitTest(lane.page, scene, point.x, point.y);
     // Some documents answer nothing for a point (e.g. mid-navigation): click anyway, and let verification judge.
-    return { ok: true, element, match: found.match, point };
-  }
-  if (hit === element.backendNodeId || scene.ancestors(hit).includes(element.backendNodeId))
-    return { ok: true, element, match: found.match, point };
+    if (hit === null) return { ok: true, element, match: found.match, point };
+    const lands = (id: number) => id === element.backendNodeId || scene.ancestors(id).includes(element.backendNodeId);
+    if (lands(hit)) return { ok: true, element, match: found.match, point };
 
-  const blocker = coveringElement(scene, hit);
-  const blockerPublic: Element = blocker ? publicElement(blocker) : { ref: `e0.${hit}`, role: "generic", name: "" };
-  return {
-    ok: false,
-    target: element,
-    match: found.match,
-    diagnosis: {
-      reason: "covered",
-      hint: `${label(element)} is covered by ${blocker ? label(blocker) : "another element"} at (${point.x}, ${point.y}); dismiss or close it first.`,
-      blocker: blockerPublic,
-    },
-  };
+    if (!scene.ancestors(element.backendNodeId).includes(hit)) {
+      for (const p of points.slice(1)) {
+        const other = await hitTest(lane.page, scene, p.x, p.y);
+        if (other !== null && lands(other)) return { ok: true, element, match: found.match, point: p, centreCoveredBy: coveringElement(scene, hit) };
+      }
+    }
+
+    // Clipped: a scroll container between the element and the page hides the
+    // point. The hit may be an ancestor, or whatever the overflowing element
+    // happens to lie over; the layout is asked, not guessed from the hit.
+    const clipped = scene.ancestors(element.backendNodeId).includes(hit)
+      || await callOn(lane.page, element.backendNodeId, `function () {
+        const r = this.getBoundingClientRect(), x = r.left + r.width / 2, y = r.top + r.height / 2;
+        for (let a = this.parentElement; a && a !== document.body; a = a.parentElement) {
+          const s = getComputedStyle(a);
+          if (s.overflowX === "visible" && s.overflowY === "visible") continue;
+          const c = a.getBoundingClientRect();
+          if (x < c.left || x > c.right || y < c.top || y > c.bottom) return true;
+        }
+        return false;
+      }`).then((v) => v === true, () => false);
+    if (clipped && attempt === 0) {
+      await lane.page.send("DOM.scrollIntoViewIfNeeded", { backendNodeId: element.backendNodeId });
+      scene = await captureScene(lane.page);
+      const moved = scene.elements.find((e) => e.backendNodeId === element.backendNodeId);
+      if (!moved?.bounds) break;
+      element = moved;
+      continue;
+    }
+    if (clipped)
+      return { ok: false, target: element, match: found.match, diagnosis: { reason: "offscreen", hint: `${label(element)} is clipped by a scroll container and scrolling did not reveal it.`, scrollable: true } };
+
+    const blocker = coveringElement(scene, hit);
+    const blockerPublic: Element = blocker ? publicElement(blocker) : { ref: `e0.${hit}`, role: "generic", name: "" };
+    return {
+      ok: false,
+      target: element,
+      match: found.match,
+      diagnosis: {
+        reason: "covered",
+        hint: `${label(element)} is covered by ${blocker ? label(blocker) : "another element"} at (${point.x}, ${point.y}); dismiss or close it first.`,
+        blocker: blockerPublic,
+      },
+    };
+  }
+  return { ok: false, target: element, match: found.match, diagnosis: { reason: "detached", hint: `${label(element)} went away while scrolling to it.` } };
 }
 
 /** The most meaningful element at a hit point: a named ancestor if the hit itself is anonymous. */
@@ -502,6 +570,13 @@ function describeChange(before: Scene, after: Scene, events: ReturnType<Probe["s
   for (const [text, n] of a) for (let k = b.get(text) ?? 0; k < n; k++) removed.push(text);
   if (added.length) { out.added = added.slice(0, LIST_LIMIT).map(clip); if (added.length > LIST_LIMIT) out.addedMore = added.length - LIST_LIMIT; }
   if (removed.length) { out.removed = removed.slice(0, LIST_LIMIT).map(clip); if (removed.length > LIST_LIMIT) out.removedMore = removed.length - LIST_LIMIT; }
+
+  // Fields that changed by any means: typed, or filled by the page itself.
+  const was = new Map(before.fields.map((f) => [f.backendNodeId, f.value]));
+  const fields = after.fields
+    .filter((f) => was.has(f.backendNodeId) && was.get(f.backendNodeId) !== f.value)
+    .map((f) => ({ target: f.label, ...(was.get(f.backendNodeId) ? { from: clip(was.get(f.backendNodeId)!) } : {}), to: clip(f.value) }));
+  if (fields.length) out.fields = fields.slice(0, LIST_LIMIT);
 
   const { events: _events, ...rest } = events;
   return Object.assign(out, rest);

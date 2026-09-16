@@ -230,6 +230,31 @@ describe("reach", () => {
     expect(r.steps[0]!.diagnosis?.waitedMs).toBeGreaterThanOrEqual(400);
   }, 30_000);
 
+  test("a button scrolled away inside its own container is scrolled to and clicked, not called covered", async () => {
+    const r = await act(lane, [{ click: "button:Scrolled away", expect: { appears: "Clicked in the scroll box." } }]);
+    expect(r.ok).toBe(true);
+  }, 30_000);
+
+  test("a field the page fills by itself is reported as a field change", async () => {
+    const r = await act(lane, [{ click: "button:Generate token" }]);
+    expect(r.steps[0]!.observation.fields).toEqual([{ target: "textbox:Token", to: "abc-123" }]);
+  }, 30_000);
+
+  test("a half-covered field: typing that the page rejects is not success, and the hint leads to the fix", async () => {
+    const first = await act(lane, [{ type: ["textbox:Last", "Lovelace"] }]);
+    const d = first.steps[0]!.diagnosis!;
+    expect(d.reason).toBe("expectation-failed");
+    expect(d.hint).toContain("centre is covered");
+    const fixed = await act(lane, [{ scroll: "textbox:Last" }, { type: ["textbox:Last", "Lovelace"], expect: { field: ["textbox:Last", "Lovelace"] } }]);
+    expect(fixed.ok).toBe(true);
+  }, 30_000);
+
+  test("hit tests stay true on a scrolled page (getNodeForLocation takes document coordinates)", async () => {
+    await act(lane, [{ scroll: { by: { x: 0, y: 180 } } }]);
+    const { outline } = await client.call<{ outline: string }>("scene.outline", { lane });
+    expect(outline).not.toMatch(/covered by/);
+  }, 30_000);
+
   test("plain text is a target", async () => {
     const r = await client.call<{ matches: Array<{ role: string }> }>("scene.find", { lane, target: { text: "Reach" } });
     expect(r.matches[0]?.role).toBe("heading");
