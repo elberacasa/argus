@@ -50,7 +50,8 @@ The daemon, through its socket, against the checkout fixture in
 | Diagnose a covered click, naming the blocker | 3 ms |
 | One verified click or type | ~160 ms |
 | Three verified steps (dismiss, type, place order) | 562 ms |
-| `check` on the checkout (snapshot rules, frames and shadow roots included) | ~200 ms |
+| `check` on the checkout, all categories (median of 10; ~510 tokens) | 2 ms |
+| Crop of one element, waiting for images (`evidence.look`, 18 image tokens) | 51 ms |
 
 About 150 ms of each verified step is the quiet window: the page must show no
 network activity and no DOM mutation for 150 ms before a step is judged.
