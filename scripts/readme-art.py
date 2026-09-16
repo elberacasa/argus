@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate the README's figures from measured numbers.
 
-    scripts/readme-art.py            writes docs/media/{stats,tokens,diagnosis,nest}.svg
+    scripts/readme-art.py            writes docs/media/{stats,tokens,diagnosis,nest,architecture}.svg
 
 Every figure is a dark tile in Argus colours, so it reads the same on GitHub's
 light and dark themes. Numbers come from docs/performance.md and the benchmark
@@ -154,7 +154,53 @@ def nest() -> str:
     return tile(w, h, body, "A native GTK app driven inside a nested desktop, with its accessibility tree")
 
 
+def architecture() -> str:
+    w, h = 1000, 440
+
+    def box(x, y, bw, bh, title, sub, strong=False):
+        stroke = ACCENT if strong else EDGE
+        fill = "rgba(60,203,184,0.07)" if strong else "rgba(255,255,255,0.03)"
+        out = f'<rect x="{x}" y="{y}" width="{bw}" height="{bh}" rx="12" fill="{fill}" stroke="{stroke}" stroke-width="{1.5 if strong else 1}"/>'
+        out += text(x + 16, y + 28, title, 15, INK, 700)
+        for i, line in enumerate(sub):
+            out += text(x + 16, y + 50 + i * 19, line, 12.5, MUTED)
+        return out
+
+    def arrow(x1, y1, x2, y2, label="", dashed=False):
+        dash = ' stroke-dasharray="5 5"' if dashed else ""
+        out = f'<path d="M{x1} {y1} C{(x1 + x2) / 2} {y1} {(x1 + x2) / 2} {y2} {x2} {y2}" fill="none" stroke="{FAINT}" stroke-width="1.5"{dash} marker-end="url(#head)"/>'
+        if label:
+            out += text((x1 + x2) / 2, (y1 + y2) / 2 - 8, label, 11.5, MUTED, anchor="middle")
+        return out
+
+    body = f'<defs><marker id="head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10z" fill="{FAINT}"/></marker></defs>'
+    body += text(28, 44, "How Argus fits together", 20, INK, 700)
+    agents = ["Claude Code", "opencode", "Codex", "any MCP client"]
+    for i, a in enumerate(agents):
+        y = 84 + i * 76
+        body += f'<rect x="28" y="{y}" width="168" height="56" rx="10" fill="rgba(255,255,255,0.03)" stroke="{EDGE}"/>'
+        body += text(112, y + 34, a, 14, INK, 600, anchor="middle")
+        body += arrow(196, y + 28, 300, 238)
+    body += text(250, 76, "MCP · CLI", 12, MUTED, 600, anchor="middle")
+    body += box(304, 150, 290, 176, "argusd", ["Argus Protocol, private socket", "act · check · evidence", "run · sweep · trace", "verified steps, named failures"], strong=True)
+    backends = [
+        ("Browser lanes", ["isolated contexts, over a pipe"], False),
+        ("Desk", ["invisible Hyprland monitor"], True),
+        ("Nests", ["nested Hyprland, own mouse"], True),
+        ("Your Chromium", ["only tabs Argus opened"], False),
+    ]
+    for i, (title, sub, live) in enumerate(backends):
+        y = 72 + i * 86
+        body += box(700, y, 272, 68, title, sub)
+        if live:
+            body += f'<rect x="878" y="{y + 12}" width="80" height="22" rx="11" fill="rgba(60,203,184,0.12)" stroke="rgba(60,203,184,0.45)"/>'
+            body += text(918, y + 27, "live in bar", 11, ACCENT, 600, anchor="middle")
+        body += arrow(594, 238, 698, y + 34)
+    body += text(28, h - 26, "Desks and nests are watched live from the Omarchy bar, view-only; their work never reaches the person's screen, focus or cursor.", 12.5, MUTED)
+    return tile(w, h, body, "Agents connect over MCP or the CLI to argusd, which drives browser lanes, desks, nests and your own Chromium")
+
+
 if __name__ == "__main__":
-    for name, make in {"stats": stats, "tokens": tokens, "diagnosis": diagnosis, "nest": nest}.items():
+    for name, make in {"stats": stats, "tokens": tokens, "diagnosis": diagnosis, "nest": nest, "architecture": architecture}.items():
         (MEDIA / f"{name}.svg").write_text(make())
         print(f"docs/media/{name}.svg")

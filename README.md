@@ -50,12 +50,9 @@ When an app needs a real mouse, a **nest** gives the agent a whole nested
 Hyprland with a pointer and keyboard of its own. It reads the app through its
 accessibility tree and verifies every step there.
 
-<table>
-<tr>
-<td width="46%" valign="top"><img src="docs/media/bar-panel.png" alt="The Argus panel in the Omarchy bar: four live agent windows" width="100%"><br><sub><b>The bar.</b> Live, view-only cards for every agent window.</sub></td>
-<td width="54%" valign="top"><img src="docs/media/nest.svg" alt="A native GTK app driven inside a nest, beside the accessibility tree the agent reads" width="100%"><br><sub><b>A nest.</b> Real clicks and keys in a native app, checked in its tree.</sub></td>
-</tr>
-</table>
+<img src="docs/media/nest.svg" alt="A native GTK app driven inside a nest, beside the accessibility tree the agent reads" width="100%">
+
+<p align="center"><img src="docs/media/bar-panel.png" alt="The Argus panel in the Omarchy bar: four live agent windows, view-only" width="72%"><br><sub><b>The Argus panel in the Omarchy bar.</b> Every agent window, live and view-only, with peek and stop.</sub></p>
 
 ### 3. Text first, pixels priced
 
@@ -126,22 +123,7 @@ point any MCP client (Claude Code, opencode, Codex, …) at the server:
 
 ## How it works
 
-```mermaid
-flowchart LR
-  subgraph agents [Agents]
-    A1[Claude Code] ~~~ A2[opencode] ~~~ A3[Codex] ~~~ A4[any MCP client]
-  end
-  agents -->|MCP / CLI| D
-
-  D["<b>argusd</b><br/>Argus Protocol over a private socket<br/>act · check · evidence · run · sweep · trace"]
-
-  D -->|pipe, no ports| L[Browser lanes<br/>isolated contexts]
-  D --> K[Desk<br/>invisible Hyprland monitor]
-  D --> N[Nests<br/>nested Hyprland, own mouse]
-  D -->|native messaging| O[Your Chromium<br/>only tabs Argus opened]
-  K -.->|live, view-only| B[Omarchy bar]
-  N -.-> B
-```
+<img src="docs/media/architecture.svg" alt="Agents connect over MCP or the CLI to argusd, which drives browser lanes, desks, nests and your own Chromium; desks and nests are watched live from the Omarchy bar" width="100%">
 
 | | What it is | Command |
 |---|---|---|
