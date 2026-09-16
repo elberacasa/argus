@@ -43,7 +43,7 @@ def text(x, y, s, size=14, fill=INK, weight=400, family=SANS, anchor="start", ex
 
 def stats() -> str:
     cards = [
-        ("0", "false successes", "UI Testing Playground"),
+        ("10/10", "0 false successes", "UI Testing Playground"),
         ("~105", "tokens per action", "vs 1,334 per screenshot"),
         ("3 ms", "to explain a blocked click", "names what is on top"),
         ("1–2 ms", "real click in a nest", "yours never moves"),

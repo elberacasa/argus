@@ -142,20 +142,22 @@ stops at the first surprise and says why: `covered`, `disabled`, `hidden`,
 
 ## Benchmarks
 
-Two head-to-heads against Claude in Chrome on the same machine, every call and
-token counted.
+Measured on the same machine, every call and token counted.
 
 **UI Testing Playground**, a third-party site built to break automation
 ([details](docs/benchmark-uitap.md)):
 
-| | Passed | Reported success for something that did not happen |
-|---|:---:|:---:|
-| **Argus** (prototype) | 7 / 10 | **0** |
-| Claude in Chrome | 9 / 10 | 3 |
+| | Passed | Reported success for something that did not happen | Calls | Tokens |
+|---|:---:|:---:|:---:|:---:|
+| **Argus** (argusd) | **10 / 10** | **0** | 31 | ~4,505 |
+| Argus prototype | 7 / 10 | 0 | 24 | ~4,500 + polling |
+| Claude in Chrome | 9 / 10 | 3 | ~29 | similar |
 
-Argus's three misses were shadow DOM, frames and waiting for a slow element.
-`argusd` was built to close exactly those, its tests cover all three, and the
-benchmark will be rerun through it.
+Every result is checked against the page itself, so a false success cannot hide.
+The argusd run plays the challenges with a scripted agent through the protocol,
+three runs in a row with identical results; reproduce it with
+`cd argusd && bun bench/uitap.ts`. The Claude in Chrome figures are from an
+earlier model-driven run and have not been rerun.
 
 **Argus's own test pages** ([details](docs/benchmark.md)): ~1,880 tokens for
 Argus and ~5,540 for Claude in Chrome across the five tasks both attempted.

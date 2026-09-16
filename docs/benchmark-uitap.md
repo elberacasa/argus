@@ -1,17 +1,65 @@
 # Benchmark 2: UI Testing Playground
 
-A neutral benchmark. The first one (`docs/benchmark.md`) ran on pages written
-alongside argus. This one uses [uitestingplayground.com](http://uitestingplayground.com),
-a third-party site built to break browser automation, where every page states
-its own trap and what success means. Tasks and pass criteria were fixed from
-those descriptions before either tool ran.
+A neutral benchmark: [uitestingplayground.com](http://uitestingplayground.com)
+is a third-party site built to break browser automation, where every page
+states its own trap and what success means. The first benchmark
+(`docs/benchmark.md`) ran on pages written alongside Argus.
+
+## argusd: 10/10, zero false successes
+
+Run on 2026-09-16 with `cd argusd && bun bench/uitap.ts`, three times in a row
+with identical results.
+
+| Challenge | Result | Argus reported | Ground truth (read from the page) | Calls | Tokens (~) |
+|---|---|---|---|---:|---:|
+| Hidden Layers | pass | 1st ok, 2nd covered | second click did not land | 4 | 570 |
+| Overlapped | pass | expectation-failed → ok | name = "Argus" | 3 | 469 |
+| Visibility | pass | Removed: not-found, Zero Width: zero-size, Overlapped: covered, Opacity 0: hidden, Visibility Hidden: hidden, Display None: hidden, Offscreen: offscreen | all 7 unusable after Hide | 9 | 1,034 |
+| Click | pass | ok | turned green | 2 | 291 |
+| Text Input | pass | ok | button reads "Argus" | 2 | 419 |
+| Client Side Delay | pass | ok → ok → ok | label clicked 1× | 2 | 388 |
+| Non-Breaking Space | pass | ok | button clicked 1× | 2 | 297 |
+| Scrollbars | pass | ok | button clicked 1× | 2 | 272 |
+| Shadow DOM | pass | ok, field reported the new GUID | GUID matches the reported value | 3 | 465 |
+| Frames | pass | ok on the inner frame's button | inner frame shows "Button pressed: Edit", outer unchanged | 2 | 300 |
+
+**10/10 passed, 0 false successes, 31 calls, ~4,505 tokens.**
+
+**How it is judged.** Each challenge is played through the Argus Protocol, the
+way an agent would: from outlines and diagnoses, never page internals. Then the
+harness reads the page itself (input values, classes, the page's own warning,
+click counters it installed, the text inside the frames) and compares. A false
+success is Argus reporting a step as done when the page shows it did not happen.
+Tokens are every protocol result the agent reads, at ~4 characters per token;
+the harness's own checks are not counted.
+
+**What is scripted.** The agent side is a script that reacts to what Argus
+returns, including the one recovery the benchmark needed (Overlapped: the
+diagnosis said the field's centre was covered and to scroll it clear, and the
+script did). It is not a model. The Claude in Chrome run below was driven by a
+model through its tools, on an earlier day, and has not been rerun.
+
+**What changed since the prototype's 7/10.** The Scene comes from the
+browser's snapshot, so shadow roots and frames are visible; waits are
+expectations; plain text is a target; field values the page fills are reported
+(the GUID); a partly covered element is clicked where it is visible; scrolling
+to a target continues until its centre is uncovered. The run also exposed a
+real bug: `DOM.getNodeForLocation` takes document coordinates, not viewport
+ones, so every hit test on a scrolled page had looked at the wrong spot. That
+was fixed and a regression test was added.
+
+---
+
+## The prototype against Claude in Chrome (earlier run)
 
 Claude in Chrome ran in the user's Chromium, driven as its tools recommend
 (`find` refs, `browser_batch`), with coordinate clicks allowed as the fallback
-its `computer` tool offers. Argus ran headless. Same retry policy for both: a
-failure that looked intermittent was rerun once; structural failures were not.
+its `computer` tool offers. The bash prototype ran headless. Same retry policy
+for both: a failure that looked intermittent was rerun once; structural
+failures were not. Tasks and pass criteria were fixed from the page
+descriptions before either tool ran.
 
-## Results
+### Results
 
 | # | Challenge | Argus | Claude in Chrome |
 |---|---|---|---|
@@ -37,7 +85,7 @@ and a similar total, with roughly 1,500 visual tokens from screenshots and
 several `find` calls that are themselves model calls on the extension's side.
 No speed ratio is claimed.
 
-## What this benchmark says that the first one did not
+### What that run said
 
 **Argus's advantage is the truth of its signals, not token count.** On a neutral
 site the costs converged. What did not converge: when a click missed, argus said
