@@ -1,0 +1,79 @@
+#!/bin/bash
+
+# argus bar -- Argus in the Omarchy bar: watch agents work, view only.
+#
+#   argus-bar install     the bar widget, and `argus` on the shell's PATH
+#   argus-bar status      is it installed, current, and enabled
+#   argus-bar uninstall   remove both
+#
+# The widget is copied, not symlinked. The shell caches QML by the path it
+# loaded, so a symlinked plugin never picked up changes to the files behind it
+# (measured). Reinstalling copies the current version and restarts the shell
+# once so the bar loads it; the bar blinks, nothing else changes.
+
+set -uo pipefail
+ARGUS_ROOT=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)
+ID=argus.desk
+SRC=$ARGUS_ROOT/omarchy/$ID
+PLUGINS=${ARGUS_OMARCHY_PLUGINS:-$HOME/.config/omarchy/plugins}
+DEST=$PLUGINS/$ID
+BIN=${ARGUS_USER_BIN:-$HOME/.local/bin}/argus
+
+current() { [[ -d $DEST ]] && diff -rq "$SRC" "$DEST" >/dev/null 2>&1; }
+enabled() { omarchy plugin list 2>/dev/null | awk -v id="$ID" '$1 == id { print $2 }' | grep -qx enabled; }
+
+install() {
+  command -v omarchy >/dev/null || { echo "argus-bar: this needs Omarchy's shell (omarchy not found)" >&2; return 1; }
+  omarchy plugin validate "$SRC" >/dev/null || { echo "argus-bar: the widget failed Omarchy's manifest validation" >&2; return 1; }
+
+  local changed=false
+  if ! current; then
+    mkdir -p "$PLUGINS"
+    # Replace a symlink or a previous copy, never follow one.
+    [[ -L $DEST ]] && rm -f "$DEST"
+    rm -rf "$DEST.new" && cp -r "$SRC" "$DEST.new" && rm -rf "$DEST" && mv "$DEST.new" "$DEST"
+    changed=true
+    echo "widget copied to $DEST"
+  fi
+
+  if [[ $(readlink -f "$BIN" 2>/dev/null) != "$ARGUS_ROOT/bin/argus" ]]; then
+    if [[ -e $BIN && ! -L $BIN ]]; then
+      echo "argus-bar: $BIN exists and is not a link to argus; leaving it alone" >&2
+    else
+      mkdir -p "$(dirname "$BIN")" && ln -sfn "$ARGUS_ROOT/bin/argus" "$BIN" && echo "linked $BIN"
+    fi
+  fi
+
+  if ! enabled; then
+    omarchy-shell -q shell rescanPlugins
+    omarchy plugin enable "$ID" >/dev/null && echo "enabled $ID in the bar"
+  elif [[ $changed == true ]]; then
+    omarchy-restart-shell >/dev/null 2>&1 && echo "restarted the shell so the bar loads the new widget"
+  fi
+  status
+}
+
+status() {
+  local ok=true
+  if [[ ! -d $DEST ]]; then echo "widget:  not installed"; ok=false
+  elif current; then echo "widget:  installed, current"
+  else echo "widget:  installed, out of date (argus bar install)"; ok=false; fi
+  if enabled; then echo "bar:     enabled"; else echo "bar:     not enabled"; ok=false; fi
+  if [[ $(readlink -f "$BIN" 2>/dev/null) == "$ARGUS_ROOT/bin/argus" ]]; then echo "command: $BIN"
+  else echo "command: argus is not linked at $BIN"; ok=false; fi
+  [[ $ok == true ]]
+}
+
+uninstall() {
+  enabled && omarchy plugin disable "$ID" >/dev/null && echo "disabled $ID"
+  [[ -d $DEST || -L $DEST ]] && rm -rf "$DEST" && echo "removed $DEST"
+  [[ -L $BIN && $(readlink -f "$BIN") == "$ARGUS_ROOT/bin/argus" ]] && rm -f "$BIN" && echo "removed $BIN"
+  return 0
+}
+
+case ${1:-status} in
+  install) install ;;
+  status) status ;;
+  uninstall) uninstall ;;
+  *) echo "usage: argus bar install|status|uninstall" >&2; exit 1 ;;
+esac

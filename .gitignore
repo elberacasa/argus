@@ -1,0 +1,11 @@
+# Runtime and editor output
+*.log
+*.tmp
+.cache/
+run/
+__pycache__/
+*.pyc
+
+# argusd build output
+argusd/node_modules/
+argusd/dist/

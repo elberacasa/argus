@@ -1,0 +1,119 @@
+#!/bin/bash
+
+# argus own -- let argus drive tabs in your own Chromium, with your logins.
+#
+#   argus-own install     native host + extension flag + Omarchy post-update hook
+#   argus-own status      is every piece in place, and is the extension connected
+#   argus-own uninstall   remove all of it
+#
+# Follows the pattern Omarchy uses for its own Chromium extensions
+# (omarchy-install-chromium-copy-url): a native messaging host manifest in the
+# browser's NativeMessagingHosts directory, and the unpacked extension named in
+# ~/.config/chromium-flags.conf. Nothing opens a remote-debugging port.
+#
+# omarchy-refresh-chromium rewrites chromium-flags.conf from Omarchy's defaults,
+# which would silently drop the extension. A post-update hook reapplies it after
+# `omarchy update`; after a manual refresh, `argus-own status` says so and
+# `argus-own install` puts it back. Every step is safe to repeat.
+
+set -uo pipefail
+ARGUS_ROOT=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)
+EXT=$ARGUS_ROOT/extension
+HOST=$ARGUS_ROOT/bin/argus-bridge-host
+HOST_NAME=com.omarchy.argus
+FLAGS=${ARGUS_CHROMIUM_FLAGS:-$HOME/.config/chromium-flags.conf}
+BROWSER_DIR=${ARGUS_CHROMIUM_DIR:-$HOME/.config/chromium}
+MANIFEST=$BROWSER_DIR/NativeMessagingHosts/$HOST_NAME.json
+HOOK=$HOME/.config/omarchy/hooks/post-update.d/argus-own
+SOCK=${XDG_RUNTIME_DIR:-/tmp}/argus/bridge.sock
+QUIET=false
+
+say() { [[ $QUIET == true ]] || printf '%s\n' "$*"; }
+
+extension_id() { jq -r .key "$EXT/manifest.json" | base64 -d | sha256sum | cut -c1-32 | tr '0-9a-f' 'a-p'; }
+
+flag_has_extension() { grep -q -- "^--load-extension=.*$EXT\(,\|$\)" "$FLAGS" 2>/dev/null; }
+
+install() {
+  if [[ $EXT == *,* ]]; then
+    echo "argus-own: the extension path contains a comma, which --load-extension cannot express: $EXT" >&2
+    return 1
+  fi
+
+  mkdir -p "$(dirname "$MANIFEST")"
+  jq -n --arg p "$HOST" --arg id "$(extension_id)" \
+    '{name:"com.omarchy.argus", description:"Argus: lets argus drive tabs it opens in this browser",
+      path:$p, type:"stdio", allowed_origins:["chrome-extension://\($id)/"]}' > "$MANIFEST"
+  say "native host   $MANIFEST"
+
+  if flag_has_extension; then
+    say "extension     already in $FLAGS"
+  else
+    [[ -f $FLAGS ]] && cp "$FLAGS" "$FLAGS.argus-backup-$(date +%Y%m%d%H%M%S)"
+    if grep -q -- '^--load-extension=' "$FLAGS" 2>/dev/null; then
+      # Chromium honours one --load-extension list; Omarchy's own extensions are
+      # already on it, so argus joins that list rather than adding a second flag.
+      awk -v ext="$EXT" 'BEGIN{done=0} /^--load-extension=/ && !done {print $0 "," ext; done=1; next} {print}' \
+        "$FLAGS" > "$FLAGS.tmp" && mv "$FLAGS.tmp" "$FLAGS"
+    else
+      printf -- '--load-extension=%s\n' "$EXT" >> "$FLAGS"
+    fi
+    say "extension     added to $FLAGS (backup kept beside it)"
+  fi
+
+  if [[ ! -f $HOOK ]] && command -v omarchy-hook-install >/dev/null; then
+    local tmp; tmp=$(mktemp)
+    printf '#!/bin/bash\n# Reapply argus to Chromium after an Omarchy update refreshes its flags.\n"%s" install --quiet\n' \
+      "$ARGUS_ROOT/bin/argus-own" > "$tmp"
+    mv "$tmp" "$(dirname "$tmp")/argus-own"
+    omarchy-hook-install post-update "$(dirname "$tmp")/argus-own" >/dev/null
+    rm -f "$(dirname "$tmp")/argus-own"
+    say "update hook   $HOOK"
+  fi
+  say ""
+  say "Restart Chromium to load Argus. Argus only ever acts on tabs it opens, grouped as \"Argus\"."
+}
+
+uninstall() {
+  rm -f "$MANIFEST" && say "removed $MANIFEST"
+  if flag_has_extension; then
+    cp "$FLAGS" "$FLAGS.argus-backup-$(date +%Y%m%d%H%M%S)"
+    awk -v ext="$EXT" '
+      /^--load-extension=/ {
+        n = split(substr($0, 18), parts, ","); out = ""
+        for (i = 1; i <= n; i++) if (parts[i] != ext) out = out (out == "" ? "" : ",") parts[i]
+        if (out != "") print "--load-extension=" out
+        next
+      }
+      {print}' "$FLAGS" > "$FLAGS.tmp" && mv "$FLAGS.tmp" "$FLAGS"
+    say "removed the extension from $FLAGS"
+  fi
+  rm -f "$HOOK" && say "removed $HOOK"
+  say "Restart Chromium to unload Argus."
+}
+
+status() {
+  local ok=true hello
+  if [[ -f $MANIFEST && $(jq -r .path "$MANIFEST" 2>/dev/null) == "$HOST" ]]; then
+    echo "native host   ok"
+  else echo "native host   missing (argus-own install)"; ok=false; fi
+  if flag_has_extension; then
+    echo "extension     in chromium-flags.conf"
+  else echo "extension     not in chromium-flags.conf (omarchy-refresh-chromium removes it; argus-own install)"; ok=false; fi
+  [[ -f $HOOK ]] && echo "update hook   ok" || echo "update hook   missing"
+  hello=$( [[ -S $SOCK ]] && printf '{"op":"hello"}\n' | socat -t 5 - "UNIX-CONNECT:$SOCK" 2>/dev/null )
+  if [[ $(jq -r .ok <<<"$hello" 2>/dev/null) == true ]]; then
+    echo "connected     yes, extension $(jq -r .result.version <<<"$hello"), $(jq -r '.result.lanes|length' <<<"$hello") lane(s)"
+  else
+    echo "connected     no (is Chromium running, and restarted since install?)"; ok=false
+  fi
+  $ok
+}
+
+[[ ${2:-} == --quiet ]] && QUIET=true
+case ${1:-status} in
+  install)   install ;;
+  uninstall) uninstall ;;
+  status)    status ;;
+  *) echo "usage: argus-own install|status|uninstall" >&2; exit 1 ;;
+esac

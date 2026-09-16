@@ -1,0 +1,89 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Argus fixture</title>
+<style>
+  body { font: 16px system-ui, sans-serif; margin: 0; padding: 32px; background: #fff; color: #222; }
+  main { max-width: 640px; }
+  button { font: inherit; padding: 10px 18px; border: 1px solid #888; background: #f4f4f4; border-radius: 6px; }
+  button[disabled] { opacity: .5; }
+
+  /* Deliberate defect 1: a modal scrim painted over the whole page, so the
+     primary action is present, visible and enabled -- and unclickable. This is
+     the single most common reason an agent's click silently does nothing. */
+  #scrim {
+    position: fixed; inset: 0; z-index: 9998; background: rgba(0,0,0,.45);
+  }
+  #consent {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 9999;
+    background: #1d2433; color: #fff; padding: 22px; text-align: center;
+  }
+  /* Deliberate defect 2: 2.3:1 against white -- fails WCAG AA. */
+  .muted { color: #adb5bd; }
+  /* Deliberate defect 3: a 16x16 tap target. */
+  .icon { width: 16px; height: 16px; padding: 0; border-radius: 3px; }
+  /* Deliberate defect 4: a row that spills past the viewport. */
+  .wide { width: 1800px; height: 20px; background: linear-gradient(90deg,#eee,#ccc); }
+  /* Deliberate defect 5: 9px body copy. */
+  .fineprint { font-size: 9px; }
+</style>
+
+<main>
+  <h1>Checkout</h1>
+  <!-- Deliberate defect 6: h1 jumps straight to h4. -->
+  <h4>Order summary</h4>
+
+  <p class="muted">Your order will ship in 3-5 business days.</p>
+  <p class="fineprint">All sales final. No refunds after 14 days.</p>
+
+  <div class="wide"></div>
+
+  <p>
+    <button id="pay">Place order</button>
+    <button id="save">Save</button>
+    <button id="save2">Save and close</button>
+    <button id="later" disabled>Pay later</button>
+    <button class="icon" id="help"></button>
+  </p>
+  <p>
+    <!-- Effects that live outside the page: a separate OS window, and the
+         window going fullscreen. Only the compositor observes these as a person
+         would, which is what a desk lane's delta reports. -->
+    <button id="popup">Open payment window</button>
+    <button id="present">Present fullscreen</button>
+  </p>
+  <p>
+    <button class="row-remove">Remove</button>
+    <button class="row-remove">Remove</button>
+  </p>
+
+  <p><input id="email" type="email" placeholder="Email address"></p>
+  <p id="status"></p>
+</main>
+
+<div id="scrim"></div>
+<div id="consent">
+  This site uses cookies.
+  <button id="accept">Accept</button>
+</div>
+
+<script>
+  // A real handler, so a click that lands produces a real observable change.
+  document.getElementById('pay').addEventListener('click', () => {
+    document.getElementById('status').textContent = 'Order placed. Confirmation sent.';
+    document.querySelector('h4').textContent = 'Order confirmed';
+    // A failing request the agent should be told about.
+    fetch('/api/receipt').catch(() => {});
+  });
+  document.getElementById('accept').addEventListener('click', () => {
+    document.getElementById('consent').remove();
+    document.getElementById('scrim').remove();
+  });
+  document.getElementById('popup').addEventListener('click', () => {
+    window.open('popup.html', 'argus-payment', 'popup,width=440,height=320');
+  });
+  document.getElementById('present').addEventListener('click', () => {
+    document.documentElement.requestFullscreen().catch(() => {});
+  });
+  // An error thrown during parse: the probe must be installed early enough to see it.
+  console.error('analytics: missing tracking id');
+</script>

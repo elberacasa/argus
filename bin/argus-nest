@@ -1,0 +1,233 @@
+#!/bin/bash
+
+# argus nest -- a whole desktop for an agent, with its own mouse.
+#
+# The desk gives agents a monitor nobody looks at, but it still shares the
+# person's compositor: one seat, one cursor. Keys can be sent to a window,
+# clicks cannot. A nest is a second Hyprland running inside the desk as a
+# window: its own seat, its own cursor, its own focus. Agents click, type and
+# scroll there with real input, and nothing reaches the person's session.
+#
+#   argus nest up [NAME] [--size WxH]      start a nested desktop (on the desk)
+#   argus nest run NAME -- CMD...          start an app inside it
+#   argus nest click NAME X Y [right]      a real click at desk coordinates
+#   argus nest move NAME X Y
+#   argus nest type NAME TEXT              type into whatever has focus there
+#   argus nest key NAME CHORD              e.g. Return, ctrl+a, alt+F4
+#   argus nest tree NAME PID               the app's accessibility tree, with coordinates
+#   argus nest click-on NAME PID ROLE:NAME click the middle of an element found in the tree
+#   argus nest shot NAME [FILE]            a frame of the nested desktop, and its token cost
+#   argus nest windows NAME                windows inside it
+#   argus nest status                      every nest
+#   argus nest down NAME | --all           stop it, and everything started in it
+#
+# Ownership: a nest is identified by the Hyprland instance that appeared after
+# launch AND whose command line carries this nest's own config path. Stopping
+# signals exactly that process and the process groups of apps started with
+# `run`, never anything matched by name.
+
+set -uo pipefail
+ARGUS_ROOT=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)
+STATE=${XDG_RUNTIME_DIR:?XDG_RUNTIME_DIR is not set}/argus
+NESTS=$STATE/nests
+mkdir -p "$NESTS"
+
+die() { echo "argus nest: $*" >&2; exit 1; }
+file_of() { echo "$NESTS/$1.json"; }
+field() { jq -r ".$2 // empty" "$(file_of "$1")" 2>/dev/null; }
+need() { [[ -f $(file_of "$1") ]] || die "no nest named $1 (argus nest up $1)"; alive "$1" || die "nest $1 is not running (argus nest down $1)"; }
+
+alive() { # the recorded pid is still a Hyprland running this nest's config
+  local pid cfg
+  pid=$(field "$1" pid); cfg=$(field "$1" config)
+  [[ -n $pid && -r /proc/$pid/cmdline ]] || return 1
+  [[ $(tr '\0' ' ' < "/proc/$pid/cmdline") == *"--config $cfg"* ]]
+}
+
+pointer() { # NAME ACTION X Y [BUTTON]
+  local sock size
+  sock=$XDG_RUNTIME_DIR/$(field "$1" socket); size=$(field "$1" size)
+  # The compiled daemon when it is current; the source when it is not, so a
+  # stale build can never answer with yesterday's behaviour.
+  local bin=$ARGUS_ROOT/argusd/dist/argusd
+  if [[ -x $bin && -z $(find "$ARGUS_ROOT/argusd/src" -newer "$bin" -name '*.ts' -print -quit) ]]; then
+    "$ARGUS_ROOT/argusd/dist/argusd" pointer "$sock" "$size" "$2" "$3" "$4" ${5:+"$5"}
+  else
+    bun "$ARGUS_ROOT/argusd/src/main.ts" pointer "$sock" "$size" "$2" "$3" "$4" ${5:+"$5"}
+  fi
+}
+
+in_nest() { # NAME CMD... with the nest's display and instance
+  local name=$1; shift
+  WAYLAND_DISPLAY=$(field "$name" socket) HYPRLAND_INSTANCE_SIGNATURE=$(field "$name" instance) "$@"
+}
+
+up() {
+  local name=main size=1280x800
+  while (( $# )); do
+    case $1 in
+      --size) size=$2; shift 2 ;;
+      *) name=$1; shift ;;
+    esac
+  done
+  [[ $name =~ ^[a-z0-9-]{1,32}$ ]] || die "names are lowercase letters, digits and dashes"
+  [[ $size =~ ^([0-9]{3,4})x([0-9]{3,4})$ ]] || die "size is WxH, e.g. 1280x800"
+  local w=${BASH_REMATCH[1]} h=${BASH_REMATCH[2]}
+  if [[ -f $(file_of "$name") ]] && alive "$name"; then echo "nest $name already up on $(field "$name" socket)"; return 0; fi
+
+  "$ARGUS_ROOT/bin/argus" desk up >/dev/null || die "could not bring the desk up"
+  local dir=$NESTS/$name cfg
+  mkdir -p "$dir"
+  cfg=$dir/hyprland.lua
+  cat > "$cfg" <<EOF
+-- argus nest "$name": one ${w}x${h} monitor, no decoration, no animation.
+hl.monitor({ output = "", mode = "${w}x${h}", position = "auto", scale = 1 })
+hl.config({
+  general = { gaps_in = 0, gaps_out = 0, border_size = 0 },
+  decoration = { rounding = 0, shadow = { enabled = false }, blur = { enabled = false } },
+  animations = { enabled = false },
+  misc = { disable_hyprland_logo = true, disable_splash_rendering = true, focus_on_activate = true, background_color = "rgb(16, 20, 24)" },
+  xwayland = { enabled = false },
+})
+EOF
+
+  local before t0
+  before=$(hyprctl instances -j | jq -c '[.[].instance]')
+  t0=$(date +%s%N)
+  # Placed by the person's compositor on the desk, silently, before it maps:
+  # exec rules apply to the window the command opens. start-hyprland is the
+  # supported launcher (without it the nest shows a warning banner). The SD
+  # variables stop the nest from publishing its display into the person's
+  # systemd and D-Bus environment, where apps they launch would find it.
+  local cmd="[workspace ${ARGUS_DESK_WS:-91} silent; float; size $w $h; opacity 1.0 override 1.0 override] sh -c 'exec env -u HYPRLAND_INSTANCE_SIGNATURE HYPRLAND_NO_SD_VARS=1 HYPRLAND_NO_SD_NOTIFY=1 start-hyprland -- --config $cfg > $dir/log 2>&1'"
+  hyprctl eval "return hl.dispatch(hl.dsp.exec_cmd(\"$cmd\"))" >/dev/null || die "the compositor refused to start the nest"
+
+  local inst="" pid="" sock="" _
+  for _ in $(seq 1 100); do
+    inst=$(hyprctl instances -j | jq -c --argjson b "$before" '[.[] | select(.instance as $i | $b | index($i) | not)]')
+    if [[ $(jq length <<<"$inst") -ge 1 ]]; then
+      local i
+      for i in $(seq 0 $(( $(jq length <<<"$inst") - 1 ))); do
+        pid=$(jq -r ".[$i].pid" <<<"$inst")
+        if [[ $(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null) == *"--config $cfg"* ]]; then
+          sock=$(jq -r ".[$i].wl_socket" <<<"$inst"); inst=$(jq -r ".[$i].instance" <<<"$inst")
+          break 2
+        fi
+      done
+    fi
+    sleep 0.1
+  done
+  [[ -n $sock && -S $XDG_RUNTIME_DIR/$sock ]] || die "the nested desktop did not start; see $dir/log"
+
+  # The watchdog restarts Hyprland if it exits, so it is recorded and stopped first.
+  local watchdog ppid_
+  ppid_=$(awk '{print $4}' "/proc/$pid/stat" 2>/dev/null)
+  [[ -n $ppid_ && $(cat "/proc/$ppid_/comm" 2>/dev/null) == start-hyprland ]] && watchdog=$ppid_ || watchdog=0
+  jq -nc --arg name "$name" --arg pid "$pid" --arg wd "$watchdog" --arg inst "$inst" --arg sock "$sock" --arg size "${w}x${h}" --arg cfg "$cfg" \
+    '{name:$name, pid:($pid|tonumber), watchdog:($wd|tonumber), instance:$inst, socket:$sock, size:$size, config:$cfg, apps:[]}' > "$(file_of "$name")"
+  printf 'nest %s up: %s on %s, %s (%sms)\n' "$name" "${w}x${h}" "$sock" "workspace ${ARGUS_DESK_WS:-91}" "$(( ($(date +%s%N) - t0) / 1000000 ))"
+}
+
+run() {
+  local name=$1; shift
+  need "$name"
+  [[ ${1:-} == -- ]] && shift
+  (( $# )) || die "usage: argus nest run NAME -- CMD..."
+  local pid
+  pid=$(in_nest "$name" setsid "$@" > "$NESTS/$name/app-$(date +%s%N).log" 2>&1 & echo $!)
+  jq --argjson p "$pid" '.apps += [$p]' "$(file_of "$name")" > "$(file_of "$name").tmp" && mv "$(file_of "$name").tmp" "$(file_of "$name")"
+  echo "$pid"
+}
+
+key() { # NAME CHORD: ctrl+shift+t -> wtype -M ctrl -M shift -k t -m shift -m ctrl
+  local name=$1 chord=$2 args=() mods=() part
+  IFS=+ read -ra parts <<<"$chord"
+  local last=${parts[-1]}
+  for part in "${parts[@]:0:${#parts[@]}-1}"; do
+    case ${part,,} in
+      ctrl|control) mods+=(ctrl) ;; shift) mods+=(shift) ;; alt) mods+=(alt) ;; super|logo|meta) mods+=(logo) ;;
+      *) die "unknown modifier $part" ;;
+    esac
+  done
+  for part in "${mods[@]}"; do args+=(-M "$part"); done
+  args+=(-k "$last")
+  for (( i=${#mods[@]}-1; i>=0; i-- )); do args+=(-m "${mods[$i]}"); done
+  in_nest "$name" wtype "${args[@]}"
+}
+
+click_on() { # NAME PID ROLE:NAME
+  local name=$1 pid=$2 target=$3 hit x y
+  need "$name"
+  hit=$(python3 "$ARGUS_ROOT/lib/atspi.py" find "$pid" "$target" 2>/dev/null) || die "no $target in app $pid"
+  [[ $(jq -r '.x // empty' <<<"$hit") != "" ]] || die "$target has no position on screen"
+  # A check box's box is at its start; a wide row's middle can be empty space.
+  if [[ $(jq -r .role <<<"$hit") =~ ^(check\ box|radio\ button)$ ]]; then
+    x=$(jq -r '.x + 8' <<<"$hit"); y=$(jq -r '.y + (.h/2|floor)' <<<"$hit")
+  else
+    x=$(jq -r '.x + (.w/2|floor)' <<<"$hit"); y=$(jq -r '.y + (.h/2|floor)' <<<"$hit")
+  fi
+  pointer "$name" click "$x" "$y" && echo "clicked $(jq -r '"\(.role):\(.name)"' <<<"$hit") at $x,$y"
+}
+
+shot() {
+  local name=$1 file=${2:-$NESTS/$1/shot.png} size w h
+  need "$name"
+  size=$(field "$name" size); w=${size%x*}; h=${size#*x}
+  in_nest "$name" grim -l 1 "$file" || die "capture failed"
+  printf '%s %s ~%s image tokens\n' "$file" "$size" "$(( ((w + 27) / 28) * ((h + 27) / 28) ))"
+}
+
+status() {
+  local f n
+  shopt -s nullglob
+  for f in "$NESTS"/*.json; do
+    n=$(basename "$f" .json)
+    if alive "$n"; then
+      printf '%-12s up    %s on %s, %s app(s)\n' "$n" "$(field "$n" size)" "$(field "$n" socket)" "$(jq '.apps|length' "$f")"
+    else
+      printf '%-12s down  (stale record; argus nest down %s)\n' "$n" "$n"
+    fi
+  done
+}
+
+down() {
+  local name=$1 p pid
+  [[ -f $(file_of "$name") ]] || { echo "no nest named $name"; return 0; }
+  for p in $(jq -r '.apps[]' "$(file_of "$name")"); do
+    # run() started each app with setsid: its pid leads its own process group.
+    [[ -r /proc/$p/stat && $(ps -o sid= -p "$p" | tr -d ' ') == "$p" ]] && pkill -TERM -s "$p"
+  done
+  local wd
+  wd=$(field "$name" watchdog)
+  if [[ -n $wd && $wd != 0 && $(cat "/proc/$wd/comm" 2>/dev/null) == start-hyprland ]] \
+    && grep -qz -- "$(field "$name" config)" "/proc/$wd/cmdline" 2>/dev/null; then
+    kill -TERM "$wd"
+  fi
+  if alive "$name"; then
+    pid=$(field "$name" pid)
+    kill -TERM "$pid"
+    for _ in $(seq 1 50); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
+    kill -0 "$pid" 2>/dev/null && kill -KILL "$pid"
+  fi
+  rm -rf "$(file_of "$name")" "${NESTS:?}/$name"
+  echo "nest $name down"
+}
+
+cmd=${1:-status}; shift || true
+case $cmd in
+  up) up "$@" ;;
+  run) run "$@" ;;
+  click) need "$1"; pointer "$1" click "$2" "$3" "${4:-}" ;;
+  move) need "$1"; pointer "$1" move "$2" "$3" ;;
+  type) need "$1"; in_nest "$1" wtype -- "$2" ;;
+  key) need "$1"; key "$1" "$2" ;;
+  tree) need "$1"; python3 "$ARGUS_ROOT/lib/atspi.py" tree "$2" 2>/dev/null ;;
+  click-on) click_on "$@" ;;
+  shot) shot "$@" ;;
+  windows) need "$1"; in_nest "$1" hyprctl clients -j | jq -r '.[] | "\(.pid)  \(.class)  \(.title)  @\(.at[0]),\(.at[1]) \(.size[0])x\(.size[1])"' ;;
+  status) status ;;
+  down)
+    if [[ ${1:-} == --all ]]; then for f in "$NESTS"/*.json; do [[ -f $f ]] && down "$(basename "$f" .json)"; done
+    else down "${1:?usage: argus nest down NAME|--all}"; fi ;;
+  *) sed -n '3,25p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+esac

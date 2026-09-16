@@ -1,0 +1,1 @@
+{"about":"Diagnosis reasons are a closed set","rejectedAt":"/steps/0/diagnosis/reason","result":"act","message":{"jsonrpc":"2.0","id":1,"result":{"ok":false,"ms":1,"steps":[{"i":0,"verb":"click","ok":false,"observation":{},"diagnosis":{"reason":"flaky","hint":"try again"}}]}}}

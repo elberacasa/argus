@@ -1,0 +1,6 @@
+{"about": "Fails only at phone width, and says why", "result": "sweep", "message": {"jsonrpc":"2.0","id":9,"result":{"name":"checkout","verdict":"fail","ms":2310,"results":[
+  {"condition":{"viewport":{"w":1440,"h":900},"colorScheme":"light"},"verdict":"pass"},
+  {"condition":{"viewport":{"w":375,"h":812},"colorScheme":"dark"},"verdict":"fail","failedAt":1,
+   "diagnosis":{"reason":"covered","hint":"Sticky footer (e0.77) covers 'Place order' at 375px.","blocker":{"ref":"e0.77","role":"contentinfo","name":""}},
+   "findings":[{"rule":"overflow-x","category":"layout","severity":"error","hint":"Page scrolls sideways by 42px.","count":1,"examples":[{"ref":"e0.90","detail":{"overflowPx":42}}]}]}
+ ]}}}

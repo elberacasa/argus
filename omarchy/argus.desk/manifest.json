@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "argus.desk",
+  "name": "Argus",
+  "version": "0.1.0",
+  "author": "Argus",
+  "license": "MIT",
+  "description": "Watch agents work on the invisible Argus desk: every agent window as a live, view-only card, with peek and stop.",
+  "kinds": ["bar-widget"],
+  "activation": "on-demand",
+  "entryPoints": {
+    "barWidget": "Widget.qml"
+  },
+  "barWidget": {
+    "displayName": "Argus",
+    "description": "Live, view-only screens of what agents are doing on the Argus desk.",
+    "category": "AI",
+    "aliases": ["argus", "agent-desk"],
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}

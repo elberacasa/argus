@@ -1,0 +1,1 @@
+{"about":"ok:false without a diagnosis is forbidden","rejectedAt":"/steps/0","result":"act","message":{"jsonrpc":"2.0","id":1,"result":{"ok":false,"ms":1,"steps":[{"i":0,"verb":"click","ok":false,"observation":{}}]}}}

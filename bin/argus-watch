@@ -1,0 +1,191 @@
+#!/bin/bash
+
+# argus watch -- every lane, live, side by side.
+#
+# Watching an agent work is not a luxury. An agent that silently retries the
+# same blocked click twenty times looks identical to one making progress until
+# you read the trace; here you see it in the moment, across every browser at
+# once, and the reason is on the line next to it.
+#
+# Reads the trace files rather than the browsers, so watching costs nothing and
+# a lane that dies is simply a pane that stops moving.
+
+set -uo pipefail
+ARGUS_ROOT=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)
+ARGUS_STATE=${XDG_RUNTIME_DIR:-/tmp}/argus
+ARGUS_LANE=0
+source "$ARGUS_ROOT/lib/trace.sh"
+
+HZ=${ARGUS_WATCH_HZ:-4}
+ONCE=false
+while [[ ${1:-} == --* ]]; do
+  case $1 in
+    --once) ONCE=true; shift ;;          # one frame to stdout: testable, pipeable
+    --hz)   HZ=${2:?--hz needs a number}; shift 2 ;;
+    *) echo "usage: argus-watch [--once] [--hz N]" >&2; exit 1 ;;
+  esac
+done
+MIN_COL=44                    # a pane narrower than this cannot show a target
+
+ESC=$(printf '\033')
+B=$ESC[1m; D=$ESC[2m; R=$ESC[0m; G=$ESC[32m; RD=$ESC[31m; Y=$ESC[33m; C=$ESC[36m; M=$ESC[35m
+
+# Alternate screen buffer, so quitting restores whatever the terminal had.
+cleanup() { printf '%s[?25h%s[?1049l' "$ESC" "$ESC"; exit 0; }
+if [[ $ONCE == false ]]; then
+  trap cleanup INT TERM EXIT
+  printf '%s[?1049h%s[?25l' "$ESC" "$ESC"
+fi
+
+# ---- cell helpers ----------------------------------------------------------
+# Padding is computed on the visible text and the colour applied around it, so
+# escape sequences never count toward width.
+pad() { # <text> <width>
+  local text=$1 width=$2
+  (( ${#text} > width )) && text=${text:0:width-1}…
+  printf '%-*s' "$width" "$text"
+}
+
+bar() { # <score 0-100> <width>
+  local score=$1 width=$2 filled i out=""
+  filled=$(( score * width / 100 ))
+  for ((i = 0; i < width; i++)); do (( i < filled )) && out+="█" || out+="░"; done
+  printf '%s' "$out"
+}
+
+# ---- one pane's worth of lines --------------------------------------------
+# Emits plain text lines prefixed with a one-char colour key, so the compositor
+# can pad on true width and colour afterwards.
+pane_lines() { # <lane> <width> <rows>
+  local lane=$1 width=$2 rows=$3
+  local file=$ARGUS_TRACE_DIR/lane-$lane.jsonl
+  local now age dot host score steps
+
+  steps=$(wc -l < "$file" 2>/dev/null || echo 0)
+  now=$(date +%s); age=$(( now - $(stat -c %Y "$file" 2>/dev/null || echo "$now") ))
+  # A lane that has not written for 10s is idle, not dead; 120s means gone.
+  local fresh
+  if   (( age < 10 ));  then fresh=g; dot="●"
+  elif (( age < 120 )); then fresh=y; dot="●"
+  else                       fresh=d; dot="○"; fi
+
+  host=$(tail -20 "$file" 2>/dev/null | jq -r 'select(.url) | .url' 2>/dev/null | tail -1)
+  case $host in
+    # A local fixture has no host; its filename is the useful identity.
+    file://*) host="${host##*/}" ;;
+    *) host=$(sed -E 's|^[a-z]+://||; s|^www\.||; s|/.*$||' <<<"$host") ;;
+  esac
+  [[ -z $host ]] && host="(no page yet)"
+
+  # A desk lane is a real window someone can peek at; say so in its title.
+  local label="lane $lane"
+  [[ $lane == desk-* ]] && label="desk ${lane#desk-}"
+  printf '%s:%s  %s  %s\n' "$fresh" "$label" "$dot" "$host"
+  printf 'd:%s\n' "$(printf '─%.0s' $(seq 1 $((width > 2 ? width - 2 : 2))))"
+
+  # The most recent rows, oldest first, so the eye tracks downward like a log.
+  # Every pane emits exactly `rows` of them, blank-filled, so the footers line
+  # up across lanes however much history each one happens to have.
+  local -a body=()
+  mapfile -t body < <(tail -n "$rows" "$file" 2>/dev/null | jq -r '
+    (.t/1000|strflocaltime("%H:%M:%S")) as $ts |
+    if .action=="audit" then
+      "m:\($ts) audit  score \(.audit.score)/100  \(.audit.errors)e \(.audit.warnings)w"
+    elif .ok==false then
+      "e:\($ts) \(.action) \((.target//"")|.[0:22])  x \(.diagnosis.reason)"
+        + (if .diagnosis.coveredBy then " (\(.diagnosis.coveredBy))" else "" end)
+    else
+      (if ((.delta.console//[])|length)>0 then "y:" else "n:" end)
+        + "\($ts) \(.action) \((.target//"")|sub("^https?://";"")|.[0:22])  \(.ms)ms"
+        + (if ((.delta.console//[])|length)>0 then "  \((.delta.console|length))err" else "" end)
+        + (if ((.delta.network//[])|length)>0 then "  \((.delta.network|length))net" else "" end)
+    end' 2>/dev/null)
+  local i
+  for (( i = 0; i < rows; i++ )); do printf '%s\n' "${body[$i]:-n:}"; done
+
+  score=$(tac "$file" 2>/dev/null | jq -r 'select(.action=="audit")|.audit.score' 2>/dev/null | head -1)
+  printf 'x:\n'
+  if [[ -n $score ]]; then
+    local key=g; (( score < 50 )) && key=e; (( score >= 50 && score < 80 )) && key=y
+    printf '%s:audit %3s/100 %s\n' "$key" "$score" "$(bar "$score" $(( width > 30 ? width - 18 : 8 )))"
+  else
+    printf 'd:audit   --      %s\n' "$(bar 0 $(( width > 30 ? width - 18 : 8 )))"
+  fi
+  printf 'd:%s steps\n' "$steps"
+}
+
+colour_of() {
+  case $1 in
+    b) printf '%s' "$B" ;; d) printf '%s' "$D" ;; g) printf '%s' "$G" ;;
+    e) printf '%s' "$RD" ;; y) printf '%s' "$Y" ;; c) printf '%s' "$C" ;;
+    m) printf '%s' "$M" ;; *) printf '' ;;
+  esac
+}
+
+# ---- compositor ------------------------------------------------------------
+draw() {
+  local cols rows lanes n per rowsper
+  cols=$(tput cols 2>/dev/null || echo 100)
+  rows=$(tput lines 2>/dev/null || echo 30)
+  mapfile -t lanes < <(trace_lanes | sort -n)
+  n=${#lanes[@]}
+
+  printf '%s[H' "$ESC"
+  if (( n == 0 )); then
+    printf '%s[2J%s  argus watch%s  %sno lanes yet -- run: argus --lane 0 open example.com%s\n' \
+      "$ESC" "$B" "$R" "$D" "$R"
+    return
+  fi
+
+  # As many columns as fit; the rest wrap to further rows of panes.
+  per=$(( cols / MIN_COL )); (( per < 1 )) && per=1; (( per > n )) && per=$n
+  local width=$(( cols / per - 2 ))
+  rowsper=$(( (rows - 4) / (( (n + per - 1) / per )) - 5 ))
+  (( rowsper < 3 )) && rowsper=3
+  (( rowsper > 14 )) && rowsper=14
+
+  local total=0 busiest=0 l steps
+  for l in "${lanes[@]}"; do
+    steps=$(wc -l < "$ARGUS_TRACE_DIR/lane-$l.jsonl" 2>/dev/null || echo 0)
+    total=$(( total + steps ))
+    (( steps > busiest )) && busiest=$steps
+  done
+  # No lane has more history than the busiest one, so anything taller is blank.
+  (( rowsper > busiest )) && rowsper=$busiest
+  (( rowsper < 3 )) && rowsper=3
+  printf '%s[2K%s argus%s %swatch%s   %s%s lanes . %s steps%s   %s%s%s\n\n' \
+    "$ESC" "$B" "$R" "$D" "$R" "$D" "$n" "$total" "$R" "$D" "$(date +%H:%M:%S)" "$R"
+
+  # Render panes in groups that share terminal rows.
+  local i j
+  for (( i = 0; i < n; i += per )); do
+    local -a buf=()            # buf[row*per + col]
+    local maxlines=0
+    for (( j = 0; j < per && i + j < n; j++ )); do
+      mapfile -t lines < <(pane_lines "${lanes[$((i+j))]}" "$width" "$rowsper")
+      (( ${#lines[@]} > maxlines )) && maxlines=${#lines[@]}
+      local k
+      for (( k = 0; k < ${#lines[@]}; k++ )); do buf[k * per + j]=${lines[$k]}=; done
+    done
+    local k
+    for (( k = 0; k < maxlines; k++ )); do
+      printf '%s[2K ' "$ESC"
+      for (( j = 0; j < per && i + j < n; j++ )); do
+        local cell=${buf[k * per + j]:-} key text
+        key=${cell%%:*}; text=${cell#*:}; text=${text%=}
+        [[ -z $cell ]] && { key=n; text=""; }
+        printf '%s%s%s  ' "$(colour_of "$key")" "$(pad "$text" "$width")" "$R"
+      done
+      printf '\n'
+    done
+    printf '%s[2K\n' "$ESC"
+  done
+  printf '%s[0J' "$ESC"        # clear anything left from a taller previous frame
+}
+
+if [[ $ONCE == true ]]; then draw; exit 0; fi
+printf '%s[2J' "$ESC"
+while :; do
+  draw
+  sleep "$(awk "BEGIN{print 1/$HZ}")"
+done

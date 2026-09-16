@@ -1,0 +1,2 @@
+{"about": "Capabilities are facts about this machine", "result": "hello",
+ "message": {"jsonrpc":"2.0","id":1,"result":{"protocol":"0","server":{"name":"argusd","version":"0.1.0"},"capabilities":{"lanes":["throwaway","own"],"eyes":true,"decider":"none","check":["a11y","layout","runtime","perf"]}}}}

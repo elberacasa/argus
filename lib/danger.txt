@@ -1,0 +1,16 @@
+# Commands an agent must never run unattended, and why.
+# Matched as prefixes against the command name.
+omarchy-drive-          destroys or re-encrypts block devices
+omarchy-migrate         rewrites system state irreversibly
+omarchy-pkg-remove      uninstalls packages
+omarchy-remove-         uninstalls software or config
+omarchy-system-reset    resets the machine
+omarchy-restart-        interrupts running services or the session
+omarchy-update          mutates the whole system
+omarchy-install-        installs software, needs network and root
+omarchy-pkg-install     installs packages
+omarchy-setup-          reconfigures subsystems
+omarchy-lock            locks the session, agent loses the desktop
+omarchy-logout          ends the session
+omarchy-reboot          reboots
+omarchy-shutdown        powers off

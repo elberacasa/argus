@@ -1,0 +1,1 @@
+{"about":"Methods are a closed set in v0","rejectedAt":"/method","message":{"jsonrpc":"2.0","id":1,"method":"page.evaluate","params":{"lane":"l1","js":"1"}}}

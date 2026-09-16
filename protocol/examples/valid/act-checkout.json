@@ -1,0 +1,7 @@
+{"about": "A script: each step states what should happen; waits are expectations",
+ "message": {"jsonrpc":"2.0","id":7,"method":"act","params":{"lane":"l1","evidence":"on-failure","steps":[
+  {"click":"button:Accept","expect":{"disappears":{"role":"dialog"}}},
+  {"type":["textbox:Email","a@b.c"],"expect":{"field":["textbox:Email","a@b.c"]}},
+  {"type":[{"role":"textbox","name":"Password"},{"secret":"shop"}]},
+  {"click":"button:Place order","expect":{"appears":"Order confirmed","url":{"matches":"/orders/\\d+"},"request":{"url":"/api/orders","status":201},"within":"20s"}}
+ ]}}}

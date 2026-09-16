@@ -1,0 +1,11 @@
+{"about": "Pure wait, ref targets, plain text targets, press, dialog, viewport", "message": {"jsonrpc":"2.0","id":"w1","method":"act","params":{"lane":"l2","steps":[
+  {"click":{"text":"Button Triggering AJAX Request"}},
+  {"wait":{"appears":"Data loaded with AJAX get request.","within":"20s"}},
+  {"click":"e2.57"},
+  {"press":"Control+a"},
+  {"dialog":{"accept":"yes"}},
+  {"viewport":{"w":375,"h":812}},
+  {"upload":["file","/tmp/a.png","/tmp/b.png"]},
+  {"scroll":{"by":{"x":0,"y":600}}},
+  {"select":["combobox:Country","Spain"],"expect":{"state":["button:Continue","enabled"],"count":["listitem",{"gte":3}],"noErrors":true}}
+ ]}}}

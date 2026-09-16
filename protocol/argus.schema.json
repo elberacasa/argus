@@ -1,0 +1,496 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://argus.omarchy.org/protocol/0/argus.schema.json",
+  "title": "Argus Protocol v0",
+  "description": "Every message on the Argus socket. Prose and rationale: docs/PROTOCOL.md.",
+  "oneOf": [
+    { "$ref": "#/$defs/Request" },
+    { "$ref": "#/$defs/Response" },
+    { "$ref": "#/$defs/Notification" }
+  ],
+
+  "$defs": {
+    "Request": {
+      "type": "object",
+      "required": ["jsonrpc", "id", "method"],
+      "properties": {
+        "jsonrpc": { "const": "2.0" },
+        "id": { "type": ["integer", "string"] },
+        "method": { "type": "string" },
+        "params": { "type": "object" }
+      },
+      "allOf": [
+        { "if": { "properties": { "method": { "const": "hello" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/params/hello" } }, "required": ["params"] } },
+        { "if": { "properties": { "method": { "const": "lane.open" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/params/lane.open" } }, "required": ["params"] } },
+        { "if": { "properties": { "method": { "const": "lane.close" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/params/lane" } }, "required": ["params"] } },
+        { "if": { "properties": { "method": { "const": "lane.list" } } }, "then": { "properties": { "params": { "type": "object", "additionalProperties": false } } } },
+        { "if": { "properties": { "method": { "const": "scene.outline" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/params/scene.outline" } }, "required": ["params"] } },
+        { "if": { "properties": { "method": { "const": "scene.find" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/params/scene.find" } }, "required": ["params"] } },
+        { "if": { "properties": { "method": { "const": "scene.expand" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/params/scene.expand" } }, "required": ["params"] } },
+        { "if": { "properties": { "method": { "const": "act" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/params/act" } }, "required": ["params"] } },
+        { "if": { "properties": { "method": { "const": "observe" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/params/observe" } }, "required": ["params"] } },
+        { "if": { "properties": { "method": { "const": "check" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/params/check" } }, "required": ["params"] } },
+        { "if": { "properties": { "method": { "const": "run" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/params/run" } }, "required": ["params"] } },
+        { "if": { "properties": { "method": { "const": "sweep" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/params/sweep" } }, "required": ["params"] } },
+        { "if": { "properties": { "method": { "type": "string", "pattern": "^evidence\\." } } }, "then": { "properties": { "params": { "$ref": "#/$defs/params/evidence" } }, "required": ["params"] } },
+        { "if": { "properties": { "method": { "const": "trace.list" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/params/trace.list" } } } },
+        { "if": { "properties": { "method": { "const": "trace.get" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/params/trace.get" } }, "required": ["params"] } },
+        { "if": { "properties": { "method": { "const": "event.subscribe" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/params/event.subscribe" } }, "required": ["params"] } },
+        { "properties": { "method": { "enum": [
+          "hello", "lane.open", "lane.close", "lane.list",
+          "scene.outline", "scene.find", "scene.expand",
+          "act", "observe", "check", "run", "sweep",
+          "evidence.look", "evidence.delta", "evidence.marks", "evidence.shot",
+          "trace.list", "trace.get", "event.subscribe"
+        ] } } }
+      ]
+    },
+
+    "Response": {
+      "type": "object",
+      "required": ["jsonrpc", "id"],
+      "properties": {
+        "jsonrpc": { "const": "2.0" },
+        "id": { "type": ["integer", "string", "null"] },
+        "result": {},
+        "error": { "$ref": "#/$defs/RpcError" }
+      },
+      "oneOf": [{ "required": ["result"] }, { "required": ["error"] }]
+    },
+
+    "Notification": {
+      "type": "object",
+      "required": ["jsonrpc", "method", "params"],
+      "not": { "required": ["id"] },
+      "properties": {
+        "jsonrpc": { "const": "2.0" },
+        "method": { "enum": ["event.step", "event.console", "event.network", "event.lane"] },
+        "params": { "type": "object", "required": ["lane"], "properties": { "lane": { "$ref": "#/$defs/LaneId" } } }
+      }
+    },
+
+    "RpcError": {
+      "type": "object",
+      "required": ["code", "message"],
+      "properties": {
+        "code": { "enum": [-32700, -32600, -32601, -32602, -32603, -32001, -32002, -32003, -32004, -32005, -32006] },
+        "message": { "type": "string" },
+        "data": {}
+      }
+    },
+
+    "params": {
+      "hello": {
+        "type": "object", "required": ["protocol"], "additionalProperties": false,
+        "properties": {
+          "protocol": { "const": "0" },
+          "client": { "type": "object", "properties": { "name": { "type": "string" }, "version": { "type": "string" } } }
+        }
+      },
+      "lane": {
+        "type": "object", "required": ["lane"], "additionalProperties": false,
+        "properties": { "lane": { "$ref": "#/$defs/LaneId" } }
+      },
+      "lane.open": {
+        "type": "object", "required": ["kind"], "additionalProperties": false,
+        "properties": {
+          "kind": { "$ref": "#/$defs/LaneKind" },
+          "url": { "type": "string" },
+          "viewport": { "$ref": "#/$defs/Viewport" },
+          "label": { "type": "string", "maxLength": 64 }
+        }
+      },
+      "scene.outline": {
+        "type": "object", "required": ["lane"], "additionalProperties": false,
+        "properties": { "lane": { "$ref": "#/$defs/LaneId" }, "budget": { "type": "integer", "minimum": 50, "maximum": 4000 } }
+      },
+      "scene.find": {
+        "type": "object", "required": ["lane", "target"], "additionalProperties": false,
+        "properties": { "lane": { "$ref": "#/$defs/LaneId" }, "target": { "$ref": "#/$defs/Target" }, "limit": { "type": "integer", "minimum": 1, "maximum": 255 } }
+      },
+      "scene.expand": {
+        "type": "object", "required": ["lane", "ref"], "additionalProperties": false,
+        "properties": { "lane": { "$ref": "#/$defs/LaneId" }, "ref": { "$ref": "#/$defs/Ref" }, "budget": { "type": "integer", "minimum": 50, "maximum": 4000 } }
+      },
+      "act": {
+        "type": "object", "required": ["lane", "steps"], "additionalProperties": false,
+        "properties": {
+          "lane": { "$ref": "#/$defs/LaneId" },
+          "steps": { "type": "array", "minItems": 1, "maxItems": 200, "items": { "$ref": "#/$defs/Step" } },
+          "stopOnSurprise": { "type": "boolean" },
+          "evidence": { "enum": ["none", "on-failure", "always"] }
+        }
+      },
+      "observe": {
+        "type": "object", "required": ["lane"], "additionalProperties": false,
+        "properties": { "lane": { "$ref": "#/$defs/LaneId" }, "since": { "type": "string" } }
+      },
+      "check": {
+        "type": "object", "required": ["lane"], "additionalProperties": false,
+        "properties": {
+          "lane": { "$ref": "#/$defs/LaneId" },
+          "only": { "type": "array", "items": { "$ref": "#/$defs/CheckCategory" }, "uniqueItems": true },
+          "target": { "$ref": "#/$defs/Target" }
+        }
+      },
+      "run": {
+        "type": "object", "required": ["name", "steps"], "additionalProperties": false,
+        "properties": {
+          "lane": { "$ref": "#/$defs/LaneId" },
+          "kind": { "$ref": "#/$defs/LaneKind" },
+          "name": { "type": "string", "minLength": 1 },
+          "steps": { "type": "array", "minItems": 1, "maxItems": 200, "items": { "$ref": "#/$defs/Step" } },
+          "check": { "type": "array", "items": { "$ref": "#/$defs/CheckCategory" }, "uniqueItems": true }
+        }
+      },
+      "sweep": {
+        "type": "object", "required": ["name", "steps", "across"], "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "steps": { "type": "array", "minItems": 1, "maxItems": 200, "items": { "$ref": "#/$defs/Step" } },
+          "across": {
+            "type": "object", "additionalProperties": false, "minProperties": 1,
+            "properties": {
+              "viewports": { "type": "array", "minItems": 1, "maxItems": 16, "items": { "$ref": "#/$defs/Viewport" } },
+              "kinds": { "type": "array", "minItems": 1, "items": { "enum": ["throwaway", "desk"] } },
+              "colorScheme": { "type": "array", "minItems": 1, "items": { "enum": ["light", "dark"] }, "uniqueItems": true }
+            }
+          },
+          "check": { "type": "array", "items": { "$ref": "#/$defs/CheckCategory" }, "uniqueItems": true }
+        }
+      },
+      "evidence": {
+        "type": "object", "required": ["lane"], "additionalProperties": false,
+        "properties": {
+          "lane": { "$ref": "#/$defs/LaneId" },
+          "target": { "$ref": "#/$defs/Target" },
+          "pad": { "type": "integer", "minimum": 0, "maximum": 400 },
+          "since": { "type": "string" },
+          "full": { "type": "boolean" }
+        }
+      },
+      "trace.list": {
+        "type": "object", "additionalProperties": false,
+        "properties": { "lane": { "$ref": "#/$defs/LaneId" }, "limit": { "type": "integer", "minimum": 1, "maximum": 1000 } }
+      },
+      "trace.get": {
+        "type": "object", "required": ["id"], "additionalProperties": false,
+        "properties": { "id": { "type": "string" } }
+      },
+      "event.subscribe": {
+        "type": "object", "required": ["kinds"], "additionalProperties": false,
+        "properties": {
+          "lanes": { "oneOf": [{ "const": "all" }, { "type": "array", "items": { "$ref": "#/$defs/LaneId" } }] },
+          "kinds": { "type": "array", "minItems": 1, "items": { "enum": ["step", "console", "network", "lane"] }, "uniqueItems": true }
+        }
+      }
+    },
+
+    "LaneId": { "type": "string", "pattern": "^l[0-9]+$" },
+    "LaneKind": { "enum": ["throwaway", "desk", "own"] },
+    "Ref": { "type": "string", "pattern": "^e[0-9]+\\.[0-9]+$" },
+    "Duration": { "type": "string", "pattern": "^[0-9]+(\\.[0-9]+)?(ms|s)$" },
+
+    "Viewport": {
+      "type": "object", "required": ["w", "h"], "additionalProperties": false,
+      "properties": {
+        "w": { "type": "integer", "minimum": 200, "maximum": 7680 },
+        "h": { "type": "integer", "minimum": 200, "maximum": 4320 },
+        "mobile": { "type": "boolean" },
+        "scale": { "type": "number", "exclusiveMinimum": 0, "maximum": 4 }
+      }
+    },
+
+    "Target": {
+      "oneOf": [
+        { "$ref": "#/$defs/Ref" },
+        { "type": "string", "minLength": 1, "not": { "pattern": "^e[0-9]+\\.[0-9]+$" }, "description": "role:name, or a bare role" },
+        { "$ref": "#/$defs/TargetObject" }
+      ]
+    },
+
+    "TargetObject": {
+          "type": "object", "additionalProperties": false, "minProperties": 1,
+          "properties": {
+            "role": { "type": "string" },
+            "name": { "type": "string" },
+            "text": { "type": "string", "minLength": 1 },
+            "near": { "$ref": "#/$defs/Target" },
+            "nth": { "type": "integer", "minimum": 1 }
+          },
+          "not": { "required": ["text", "role"] }
+    },
+
+    "Step": {
+      "type": "object",
+      "minProperties": 1,
+      "properties": {
+        "id": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,64}$" },
+        "expect": { "$ref": "#/$defs/Expectation" },
+        "open": { "type": "string", "minLength": 1 },
+        "click": { "$ref": "#/$defs/Target" },
+        "hover": { "$ref": "#/$defs/Target" },
+        "type": {
+          "type": "array", "prefixItems": [
+            { "$ref": "#/$defs/Target" },
+            { "oneOf": [{ "type": "string" }, { "type": "object", "required": ["secret"], "additionalProperties": false, "properties": { "secret": { "type": "string", "minLength": 1 } } }] }
+          ], "minItems": 2, "maxItems": 2
+        },
+        "press": { "type": "string", "pattern": "^((Control|Shift|Alt|Meta)\\+)*[^+]+$" },
+        "select": { "type": "array", "prefixItems": [{ "$ref": "#/$defs/Target" }, { "type": "string" }], "minItems": 2, "maxItems": 2 },
+        "upload": { "type": "array", "prefixItems": [{ "$ref": "#/$defs/Target" }], "items": { "type": "string", "minLength": 1 }, "minItems": 2 },
+        "scroll": { "oneOf": [{ "$ref": "#/$defs/Target" }, { "type": "object", "required": ["by"], "additionalProperties": false, "properties": { "by": { "type": "object", "required": ["x", "y"], "properties": { "x": { "type": "number" }, "y": { "type": "number" } } } } }] },
+        "dialog": { "oneOf": [{ "enum": ["accept", "dismiss"] }, { "type": "object", "required": ["accept"], "additionalProperties": false, "properties": { "accept": { "type": "string" } } }] },
+        "viewport": { "oneOf": [{ "const": "reset" }, { "$ref": "#/$defs/Viewport" }] },
+        "wait": { "$ref": "#/$defs/Expectation" }
+      },
+      "additionalProperties": false,
+      "oneOf": [
+        { "required": ["open"] }, { "required": ["click"] }, { "required": ["hover"] }, { "required": ["type"] },
+        { "required": ["press"] }, { "required": ["select"] }, { "required": ["upload"] }, { "required": ["scroll"] },
+        { "required": ["dialog"] }, { "required": ["viewport"] }, { "required": ["wait"] }
+      ]
+    },
+
+    "Expectation": {
+      "type": "object", "additionalProperties": false, "minProperties": 1,
+      "properties": {
+        "within": { "$ref": "#/$defs/Duration" },
+        "appears": { "description": "a string is text; name an element with an object", "oneOf": [{ "type": "string", "minLength": 1 }, { "$ref": "#/$defs/TargetObject" }] },
+        "disappears": { "description": "a string is text; name an element with an object", "oneOf": [{ "type": "string", "minLength": 1 }, { "$ref": "#/$defs/TargetObject" }] },
+        "url": {
+          "type": "object", "additionalProperties": false, "minProperties": 1,
+          "properties": { "is": { "type": "string" }, "matches": { "type": "string" }, "changes": { "type": "boolean" } }
+        },
+        "field": { "type": "array", "prefixItems": [{ "$ref": "#/$defs/Target" }, { "type": "string" }], "minItems": 2, "maxItems": 2 },
+        "state": { "type": "array", "prefixItems": [{ "$ref": "#/$defs/Target" }, { "$ref": "#/$defs/ElementState" }], "minItems": 2, "maxItems": 2 },
+        "count": {
+          "type": "array", "minItems": 2, "maxItems": 2,
+          "prefixItems": [
+            { "$ref": "#/$defs/Target" },
+            { "oneOf": [{ "type": "integer", "minimum": 0 }, { "type": "object", "minProperties": 1, "additionalProperties": false, "properties": { "gte": { "type": "integer" }, "lte": { "type": "integer" } } }] }
+          ]
+        },
+        "noErrors": { "type": "boolean" },
+        "request": {
+          "type": "object", "required": ["url"], "additionalProperties": false,
+          "properties": { "url": { "type": "string" }, "method": { "type": "string" }, "status": { "type": "integer", "minimum": 0, "maximum": 599 } }
+        }
+      },
+      "not": { "required": ["within"], "maxProperties": 1 }
+    },
+
+    "ElementState": { "enum": ["disabled", "enabled", "checked", "unchecked", "expanded", "collapsed", "selected", "focused", "required", "invalid", "readonly", "visible", "hidden"] },
+
+    "Rect": {
+      "type": "object", "required": ["x", "y", "w", "h"], "additionalProperties": false,
+      "properties": { "x": { "type": "number" }, "y": { "type": "number" }, "w": { "type": "number", "minimum": 0 }, "h": { "type": "number", "minimum": 0 } }
+    },
+
+    "Element": {
+      "type": "object", "required": ["ref", "role", "name"],
+      "properties": {
+        "ref": { "$ref": "#/$defs/Ref" },
+        "role": { "type": "string" },
+        "name": { "type": "string" },
+        "bounds": { "oneOf": [{ "$ref": "#/$defs/Rect" }, { "type": "null" }] },
+        "frames": { "type": "array", "items": { "type": "integer", "minimum": 0 } },
+        "shadow": { "enum": ["open", "closed", null] },
+        "state": { "type": "array", "items": { "$ref": "#/$defs/ElementState" }, "uniqueItems": true },
+        "reach": {
+          "oneOf": [
+            { "enum": ["ok", "offscreen", "hidden", "zero-size"] },
+            { "type": "object", "required": ["blocked"], "additionalProperties": false, "properties": { "blocked": { "$ref": "#/$defs/Element" } } }
+          ]
+        }
+      }
+    },
+
+    "Observation": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "ms": { "type": "integer", "minimum": 0 },
+        "settled": { "oneOf": [{ "const": "timeout" }, { "type": "object", "required": ["quietMs", "waitedMs"], "properties": { "quietMs": { "type": "integer" }, "waitedMs": { "type": "integer" } } }] },
+        "url": { "$ref": "#/$defs/Change" },
+        "title": { "$ref": "#/$defs/Change" },
+        "added": { "type": "array", "items": { "type": "string" } },
+        "addedMore": { "type": "integer", "minimum": 1 },
+        "removed": { "type": "array", "items": { "type": "string" } },
+        "removedMore": { "type": "integer", "minimum": 1 },
+        "fields": { "type": "array", "items": { "type": "object", "required": ["target", "to"], "properties": { "target": { "type": "string" }, "from": { "type": "string" }, "to": { "type": "string" } } } },
+        "focus": { "type": "object", "properties": { "from": { "type": ["string", "null"] }, "to": { "type": ["string", "null"] }, "offscreen": { "type": "boolean" } } },
+        "dialogs": { "type": "array", "items": { "type": "object", "required": ["type", "message"], "properties": { "type": { "enum": ["alert", "confirm", "prompt", "beforeunload"] }, "message": { "type": "string" }, "answered": { "enum": ["accept", "dismiss", "unanswered"] } } } },
+        "console": { "type": "array", "items": { "type": "object", "required": ["level", "text"], "properties": { "level": { "enum": ["warning", "error"] }, "text": { "type": "string" }, "source": { "type": "string" } } } },
+        "exceptions": { "type": "array", "items": { "type": "object", "required": ["message"], "properties": { "message": { "type": "string" }, "stack": { "type": "string" } } } },
+        "network": { "type": "array", "items": { "type": "object", "required": ["url"], "properties": { "method": { "type": "string" }, "url": { "type": "string" }, "status": { "type": "integer" }, "ms": { "type": "integer" }, "error": { "type": "string" } } } },
+        "downloads": { "type": "array", "items": { "type": "object", "required": ["path"], "properties": { "path": { "type": "string" }, "bytes": { "type": "integer" } } } },
+        "layoutShift": { "type": "number", "minimum": 0 },
+        "longTasks": { "type": "integer", "minimum": 1 },
+        "compositor": { "type": "object" },
+        "rebound": { "type": "boolean" },
+        "effect": { "const": "none" },
+        "expect": {
+          "type": "object", "required": ["held"],
+          "properties": { "held": { "type": "boolean" }, "failed": { "type": "array", "items": { "$ref": "#/$defs/FailedCondition" } } }
+        }
+      }
+    },
+
+    "Change": { "type": "object", "required": ["from", "to"], "properties": { "from": { "type": "string" }, "to": { "type": "string" } } },
+    "FailedCondition": { "type": "object", "required": ["condition", "actual"], "properties": { "condition": { "type": "string" }, "actual": {} } },
+
+    "DiagnosisReason": {
+      "enum": ["not-found", "ambiguous", "covered", "disabled", "hidden", "offscreen", "zero-size", "detached",
+               "expectation-failed", "timeout", "navigation-failed", "dialog-blocked", "forbidden", "probe-error"]
+    },
+
+    "Diagnosis": {
+      "type": "object", "required": ["reason", "hint"],
+      "properties": {
+        "reason": { "$ref": "#/$defs/DiagnosisReason" },
+        "hint": { "type": "string", "minLength": 1 },
+        "didYouMean": { "type": "array", "items": { "$ref": "#/$defs/Element" } },
+        "candidates": { "type": "array", "items": { "$ref": "#/$defs/Element" } },
+        "blocker": { "$ref": "#/$defs/Element" },
+        "why": { "enum": ["display", "visibility", "opacity", "inert", "aria-hidden"] },
+        "scrollable": { "type": "boolean" },
+        "failed": { "type": "array", "items": { "$ref": "#/$defs/FailedCondition" } },
+        "waitedMs": { "type": "integer" },
+        "errorText": { "type": "string" },
+        "detail": { "type": "string" }
+      },
+      "allOf": [
+        { "if": { "properties": { "reason": { "const": "covered" } } }, "then": { "required": ["blocker"] } },
+        { "if": { "properties": { "reason": { "const": "ambiguous" } } }, "then": { "required": ["candidates"] } },
+        { "if": { "properties": { "reason": { "const": "not-found" } } }, "then": { "required": ["didYouMean"] } },
+        { "if": { "properties": { "reason": { "const": "expectation-failed" } } }, "then": { "required": ["failed"] } },
+        { "if": { "properties": { "reason": { "const": "timeout" } } }, "then": { "required": ["waitedMs"] } },
+        { "if": { "properties": { "reason": { "const": "navigation-failed" } } }, "then": { "required": ["errorText"] } },
+        { "if": { "properties": { "reason": { "const": "probe-error" } } }, "then": { "required": ["detail"] } }
+      ]
+    },
+
+    "Evidence": {
+      "type": "object", "required": ["image", "w", "h", "tokens"],
+      "properties": {
+        "image": { "type": "string" },
+        "w": { "type": "integer", "minimum": 1 },
+        "h": { "type": "integer", "minimum": 1 },
+        "tokens": { "type": "integer", "minimum": 1 },
+        "regions": { "type": "array", "items": { "$ref": "#/$defs/Rect" } },
+        "legend": { "type": "array" }
+      }
+    },
+
+    "StepResult": {
+      "type": "object", "required": ["i", "verb", "ok", "observation"],
+      "properties": {
+        "i": { "type": "integer", "minimum": 0 },
+        "id": { "type": "string" },
+        "verb": { "enum": ["open", "click", "hover", "type", "press", "select", "upload", "scroll", "dialog", "viewport", "wait"] },
+        "ok": { "type": "boolean" },
+        "target": { "$ref": "#/$defs/Element" },
+        "match": { "enum": ["exact", "ci", "substring", "ref"] },
+        "observation": { "$ref": "#/$defs/Observation" },
+        "diagnosis": { "$ref": "#/$defs/Diagnosis" },
+        "evidence": { "type": "array", "items": { "$ref": "#/$defs/Evidence" } }
+      },
+      "if": { "properties": { "ok": { "const": false } } },
+      "then": { "required": ["diagnosis"] },
+      "else": { "not": { "required": ["diagnosis"] } }
+    },
+
+    "CheckCategory": { "enum": ["a11y", "layout", "runtime", "perf"] },
+    "CheckRule": {
+      "enum": ["contrast", "unnamed-control", "img-alt", "heading-order", "duplicate-id", "tap-target",
+               "overflow-x", "tiny-text", "clipped-text", "overlap",
+               "console-error", "exception", "failed-request", "mixed-content",
+               "layout-shift", "long-task", "slow-request", "large-image"]
+    },
+
+    "Finding": {
+      "type": "object", "required": ["rule", "category", "severity", "hint", "count", "examples"],
+      "properties": {
+        "rule": { "$ref": "#/$defs/CheckRule" },
+        "category": { "$ref": "#/$defs/CheckCategory" },
+        "severity": { "enum": ["error", "warn"] },
+        "hint": { "type": "string" },
+        "count": { "type": "integer", "minimum": 1 },
+        "examples": { "type": "array", "items": { "type": "object", "properties": { "ref": { "$ref": "#/$defs/Ref" }, "text": { "type": "string" }, "detail": {} } } }
+      }
+    },
+
+    "result": {
+      "hello": {
+        "type": "object", "required": ["protocol", "server", "capabilities"],
+        "properties": {
+          "protocol": { "const": "0" },
+          "server": { "type": "object", "required": ["name", "version"] },
+          "capabilities": {
+            "type": "object", "required": ["lanes"],
+            "properties": {
+              "lanes": { "type": "array", "items": { "$ref": "#/$defs/LaneKind" } },
+              "eyes": { "type": "boolean" },
+              "decider": { "enum": ["none", "local", "jev", "frontier"] },
+              "check": { "type": "array", "items": { "$ref": "#/$defs/CheckCategory" } }
+            }
+          }
+        }
+      },
+      "act": {
+        "type": "object", "required": ["ok", "steps", "ms"],
+        "properties": {
+          "ok": { "type": "boolean" },
+          "steps": { "type": "array", "items": { "$ref": "#/$defs/StepResult" } },
+          "ms": { "type": "integer", "minimum": 0 },
+          "tokensEst": { "type": "integer", "minimum": 0 }
+        }
+      },
+      "check": {
+        "type": "object", "required": ["score", "findings", "scanned"],
+        "properties": {
+          "score": { "type": "integer", "minimum": 0, "maximum": 100 },
+          "findings": { "type": "array", "items": { "$ref": "#/$defs/Finding" } },
+          "scanned": { "type": "integer", "minimum": 0 },
+          "tokensEst": { "type": "integer", "minimum": 0 }
+        }
+      },
+      "run": {
+        "type": "object", "required": ["name", "verdict", "steps", "ms", "trace"],
+        "properties": {
+          "name": { "type": "string" },
+          "verdict": { "enum": ["pass", "fail"] },
+          "failedAt": { "type": "integer", "minimum": 0 },
+          "steps": { "type": "array", "items": { "$ref": "#/$defs/StepResult" } },
+          "findings": { "type": "array", "items": { "$ref": "#/$defs/Finding" } },
+          "ms": { "type": "integer", "minimum": 0 },
+          "trace": { "type": "string" }
+        },
+        "if": { "properties": { "verdict": { "const": "fail" } } },
+        "then": { "required": ["failedAt"] }
+      },
+      "sweep": {
+        "type": "object", "required": ["name", "verdict", "results", "ms"],
+        "properties": {
+          "name": { "type": "string" },
+          "verdict": { "enum": ["pass", "fail"] },
+          "results": {
+            "type": "array", "minItems": 1,
+            "items": {
+              "type": "object", "required": ["condition", "verdict"],
+              "properties": {
+                "condition": { "type": "object", "properties": { "viewport": { "$ref": "#/$defs/Viewport" }, "kind": { "$ref": "#/$defs/LaneKind" }, "colorScheme": { "enum": ["light", "dark"] } } },
+                "verdict": { "enum": ["pass", "fail"] },
+                "failedAt": { "type": "integer", "minimum": 0 },
+                "diagnosis": { "$ref": "#/$defs/Diagnosis" },
+                "findings": { "type": "array", "items": { "$ref": "#/$defs/Finding" } },
+                "evidence": { "type": "array", "items": { "$ref": "#/$defs/Evidence" } }
+              }
+            }
+          },
+          "ms": { "type": "integer", "minimum": 0 }
+        }
+      }
+    }
+  }
+}

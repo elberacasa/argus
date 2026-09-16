@@ -1,0 +1,171 @@
+#!/usr/bin/env python3
+"""argus bridge host -- relays argus commands into the user's own Chromium.
+
+Chromium launches this process for the Argus extension only (the host manifest
+names exactly one allowed extension ID) and talks to it over stdin/stdout with
+native messaging framing: a 4-byte little-endian length, then JSON.
+
+argus reaches it over a Unix socket in $XDG_RUNTIME_DIR, created with mode 0600
+inside a 0700 directory, so only processes of the same user can connect -- the
+same trust boundary as the user running argus. One request per connection: a
+JSON line in, a JSON line out.
+
+There is deliberately no TCP listener and no remote-debugging port anywhere.
+"""
+
+import json
+import os
+import socket
+import socketserver
+import struct
+import sys
+import threading
+
+RUNTIME = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+STATE = os.path.join(RUNTIME, "argus")
+# A browser can be given its own bridge socket through its environment, which the
+# native host inherits. Tests use this so a throwaway browser can never touch the
+# socket of the person's real one.
+SOCK = os.environ.get("ARGUS_BRIDGE_SOCK") or os.path.join(STATE, "bridge.sock")
+TIMEOUT = 60
+
+stdout_lock = threading.Lock()
+pending = {}                    # request id -> [threading.Event, response]
+pending_lock = threading.Lock()
+next_id = 0
+
+
+def send_to_extension(message):
+    data = json.dumps(message, separators=(",", ":")).encode()
+    with stdout_lock:
+        sys.stdout.buffer.write(struct.pack("<I", len(data)) + data)
+        sys.stdout.buffer.flush()
+
+
+def read_from_extension():
+    """Route responses to whichever socket client is waiting for that id. When
+    the browser closes the pipe the extension is gone, so the host goes too."""
+    stream = sys.stdin.buffer
+    while True:
+        header = stream.read(4)
+        if len(header) < 4:
+            break
+        (length,) = struct.unpack("<I", header)
+        body = stream.read(length)
+        try:
+            message = json.loads(body)
+        except ValueError:
+            continue
+        with pending_lock:
+            slot = pending.get(message.get("id"))
+        if slot:
+            slot[1] = message
+            slot[0].set()
+    shutdown()
+
+
+class Relay(socketserver.StreamRequestHandler):
+    def handle(self):
+        global next_id
+        line = self.rfile.readline()
+        try:
+            request = json.loads(line)
+            if not isinstance(request, dict) or "op" not in request:
+                raise ValueError("expected a JSON object with an op")
+        except ValueError as e:
+            self.reply({"ok": False, "error": f"bad request: {e}"})
+            return
+
+        if request["op"] == "host":
+            self.reply({"ok": True, "result": {"pid": os.getpid(), "socket": SOCK}})
+            return
+
+        with pending_lock:
+            next_id += 1
+            rid = next_id
+            slot = pending[rid] = [threading.Event(), None]
+        try:
+            # A caller may ask for a shorter wait: a screenshot of a tab that is
+            # not being rendered can stall, and retrying beats waiting a minute.
+            timeout = max(0.25, min(120.0, float(request.pop("timeout", TIMEOUT))))
+            send_to_extension({**request, "id": rid})
+            if not slot[0].wait(timeout):
+                self.reply({"ok": False, "error": f"extension did not answer within {timeout}s"})
+                return
+            response = slot[1]
+            response.pop("id", None)
+            self.reply(response)
+        finally:
+            with pending_lock:
+                pending.pop(rid, None)
+
+    def reply(self, obj):
+        self.wfile.write(json.dumps(obj, separators=(",", ":")).encode() + b"\n")
+
+
+class Server(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
+    daemon_threads = True
+
+
+server = None
+
+
+def shutdown():
+    if server:
+        threading.Thread(target=server.shutdown, daemon=True).start()
+    else:
+        # A waiting host with nothing bound: the browser is gone, so are we.
+        os._exit(0)
+
+
+def socket_live():
+    probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    probe.settimeout(1)
+    try:
+        probe.connect(SOCK)
+        return True
+    except OSError:
+        return False
+    finally:
+        probe.close()
+
+
+def main():
+    global server
+    os.makedirs(os.path.dirname(SOCK), mode=0o700, exist_ok=True)
+    os.chmod(os.path.dirname(SOCK), 0o700)
+    threading.Thread(target=read_from_extension, daemon=True).start()
+
+    # Never take a live socket. An earlier version let the newest host take it:
+    # a throwaway test browser's host then took the person's real browser's
+    # socket and deleted it on exit, cutting argus off from their browser. (The
+    # "stranded hosts" that change was meant to fix were pgrep matching its own
+    # command line.) A host that finds the socket live waits and claims it if
+    # the owner goes away, which is also failover.
+    while True:
+        if os.path.exists(SOCK) and socket_live():
+            threading.Event().wait(2)
+            continue
+        if os.path.exists(SOCK):
+            os.unlink(SOCK)
+        old = os.umask(0o177)          # socket created 0600
+        try:
+            server = Server(SOCK, Relay)
+            break
+        except OSError:
+            threading.Event().wait(2)   # lost a race for it; look again
+        finally:
+            os.umask(old)
+
+    try:
+        server.serve_forever()
+    finally:
+        server.server_close()
+        try:
+            os.unlink(SOCK)
+        except FileNotFoundError:
+            pass
+
+
+if __name__ == "__main__":
+    main()

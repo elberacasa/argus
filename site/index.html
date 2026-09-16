@@ -1,0 +1,877 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Argus — Computer use for Omarchy</title>
+<meta name="description" content="Argus gives coding agents on Omarchy many browsers at once, reports what each action changed instead of what the page looks like, and says why a click failed.">
+<meta name="theme-color" content="#f6f4ef" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0b0d10" media="(prefers-color-scheme: dark)">
+<meta property="og:title" content="Argus — Computer use for Omarchy">
+<meta property="og:description" content="Your agent doesn't use a computer. It has one.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cpath d='M6 32Q32 8 58 32Q32 56 6 32Z' fill='%23fff' stroke='%2315171b' stroke-width='4'/%3E%3Ccircle cx='32' cy='32' r='11' fill='%23007c64'/%3E%3Ccircle cx='32' cy='32' r='4.5' fill='%2315171b'/%3E%3C/svg%3E">
+<script>
+  // Before first paint: pick the theme and mark JS as available, so neither the
+  // colours nor the terminal replay flash into a different state.
+  (function () {
+    var root = document.documentElement;
+    root.classList.add("js");
+    try {
+      var saved = localStorage.getItem("argus-theme");
+      if (saved === "light" || saved === "dark") root.setAttribute("data-theme", saved);
+    } catch (e) {}
+  })();
+</script>
+<style>
+  /* ---- tokens ------------------------------------------------------------ */
+  :root {
+    --bg: #f6f4ef;
+    --surface: #ffffff;
+    --surface-2: #efece5;
+    --ink: #15171b;
+    --ink-2: #4b5059;
+    --ink-3: #5f6570;
+    --line: #e0dbd1;
+    --accent: #007c64;
+    --accent-strong: #005f4d;
+    --on-accent: #ffffff;
+    --focus: #007c64;
+    --chart-hero: #007c64;
+    --chart-context: #8b929d;
+    --eye-white: #ffffff;
+    --scan: rgba(0, 124, 100, 0.35);
+    --shadow: 0 1px 2px rgba(21, 23, 27, 0.06), 0 12px 32px -12px rgba(21, 23, 27, 0.18);
+
+    --term-bg: #0f1216;
+    --term-line: #262b33;
+    --term-ink: #e4e2dc;
+    --term-dim: #939aa4;
+    --term-green: #7ad3a0;
+    --term-red: #ff9389;
+    --term-yellow: #f0c36a;
+    --term-cyan: #74d3df;
+    --term-magenta: #d2a8f4;
+
+    --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --font-mono: "JetBrainsMono Nerd Font", "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --radius: 14px;
+    --gutter: clamp(1rem, 4vw, 2rem);
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0b0d10;
+      --surface: #12151a;
+      --surface-2: #181c22;
+      --ink: #ecebe6;
+      --ink-2: #a9afb8;
+      --ink-3: #979ea8;
+      --line: #262b33;
+      --accent: #3ccbb8;
+      --accent-strong: #6adccd;
+      --on-accent: #04201b;
+      --focus: #6adccd;
+      --chart-hero: #22a797;
+      --chart-context: #5f6671;
+      --eye-white: #ebe8e0;
+      --scan: rgba(60, 203, 184, 0.35);
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 16px 40px -16px rgba(0, 0, 0, 0.7);
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0b0d10;
+    --surface: #12151a;
+    --surface-2: #181c22;
+    --ink: #ecebe6;
+    --ink-2: #a9afb8;
+    --ink-3: #979ea8;
+    --line: #262b33;
+    --accent: #3ccbb8;
+    --accent-strong: #6adccd;
+    --on-accent: #04201b;
+    --focus: #6adccd;
+    --chart-hero: #22a797;
+    --chart-context: #5f6671;
+    --eye-white: #ebe8e0;
+    --scan: rgba(60, 203, 184, 0.35);
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 16px 40px -16px rgba(0, 0, 0, 0.7);
+    color-scheme: dark;
+  }
+
+  /* ---- base -------------------------------------------------------------- */
+  *, *::before, *::after { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 400 1.0625rem/1.6 var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  img, svg { display: block; max-width: 100%; }
+  [hidden] { display: none !important; }
+  a { color: var(--accent); text-underline-offset: 0.2em; text-decoration-thickness: 1px; }
+  a:hover { color: var(--accent-strong); }
+  :focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; border-radius: 6px; }
+  code, pre, kbd { font-family: var(--font-mono); }
+  h1, h2, h3 { line-height: 1.1; letter-spacing: -0.02em; margin: 0; text-wrap: balance; }
+  p { margin: 0; text-wrap: pretty; }
+  section[id] { scroll-margin-top: 5rem; }
+  /* The skip link's target takes focus so assistive tech moves into the content;
+     it is not a control, so it draws no ring. */
+  main:focus { outline: none; }
+
+  .wrap { width: 100%; max-width: 72rem; margin-inline: auto; padding-inline: var(--gutter); }
+  .visually-hidden {
+    position: absolute !important; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+  }
+  .skip {
+    position: absolute; left: var(--gutter); top: 0.75rem; z-index: 100; transform: translateY(-200%);
+    background: var(--ink); color: var(--bg); padding: 0.75rem 1rem; border-radius: 10px; font-weight: 600;
+  }
+  .skip:focus { transform: none; color: var(--bg); }
+
+  /* ---- buttons ----------------------------------------------------------- */
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 0.5rem;
+    min-height: 48px; padding: 0 1.35rem; border-radius: 999px;
+    font: 600 1rem/1 var(--font-sans); text-decoration: none; cursor: pointer;
+    border: 1px solid transparent; transition: background-color .15s, color .15s, border-color .15s, transform .15s;
+  }
+  .btn:active { transform: translateY(1px); }
+  .btn-primary { background: var(--accent); color: var(--on-accent); }
+  .btn-primary:hover { background: var(--accent-strong); color: var(--on-accent); }
+  .btn-ghost { background: transparent; color: var(--ink); border-color: var(--line); }
+  .btn-ghost:hover { border-color: var(--ink-3); color: var(--ink); }
+
+  /* ---- header ------------------------------------------------------------ */
+  .site-header {
+    position: sticky; top: 0; z-index: 50;
+    background: color-mix(in srgb, var(--bg) 90%, transparent);
+    backdrop-filter: saturate(1.4) blur(12px);
+    -webkit-backdrop-filter: saturate(1.4) blur(12px);
+    border-bottom: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+  }
+  .nav { display: flex; align-items: center; gap: 1rem; min-height: 4rem; }
+  .brand { display: inline-flex; align-items: center; gap: 0.6rem; color: var(--ink); text-decoration: none; font-weight: 700; font-size: 1.125rem; letter-spacing: -0.01em; min-height: 44px; }
+  .brand:hover { color: var(--ink); }
+  .brand svg { width: 30px; height: 30px; }
+  .nav-links { display: flex; gap: 0.25rem; margin: 0 0 0 auto; padding: 0; list-style: none; }
+  .nav-links a {
+    display: inline-flex; align-items: center; min-height: 44px; padding: 0 0.8rem; border-radius: 999px;
+    color: var(--ink-2); text-decoration: none; font-weight: 500; font-size: 0.95rem;
+  }
+  .nav-links a:hover { color: var(--ink); background: var(--surface-2); }
+  .nav-actions { display: flex; align-items: center; gap: 0.5rem; }
+  .icon-btn {
+    display: inline-grid; place-items: center; width: 44px; height: 44px; border-radius: 999px;
+    border: 1px solid var(--line); background: transparent; color: var(--ink); cursor: pointer;
+  }
+  .icon-btn:hover { background: var(--surface-2); }
+  .icon-btn svg { width: 20px; height: 20px; }
+  .menu-btn { display: none; }
+  .nav .btn { min-height: 44px; padding: 0 1.1rem; font-size: 0.95rem; }
+
+  @media (max-width: 860px) {
+    .nav-links {
+      display: none; position: absolute; top: 100%; left: 0; right: 0; margin: 0;
+      flex-direction: column; gap: 0; padding: 0.5rem var(--gutter) 1rem;
+      background: var(--bg); border-bottom: 1px solid var(--line);
+    }
+    .nav-links[data-open="true"] { display: flex; }
+    .nav-links a { min-height: 48px; font-size: 1.05rem; padding: 0 0.5rem; }
+    .menu-btn { display: inline-grid; }
+    .nav-actions { margin-left: auto; }
+    .nav .btn-primary { display: none; }
+  }
+
+  /* ---- hero -------------------------------------------------------------- */
+  .hero { padding-block: clamp(3rem, 8vw, 6rem) clamp(1.5rem, 3vw, 2.5rem); text-align: center; }
+  .hero-mark { width: clamp(150px, 34vw, 216px); margin: 0 auto 1.75rem; }
+  .eyebrow {
+    display: inline-flex; align-items: center; gap: 0.5rem; margin-bottom: 1.25rem;
+    font: 600 0.8125rem/1 var(--font-mono); letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-2);
+    padding: 0.55rem 0.9rem; border: 1px solid var(--line); border-radius: 999px; background: var(--surface);
+  }
+  .eyebrow .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 20%, transparent); }
+  .hero h1 {
+    font-size: clamp(2.35rem, 1.1rem + 5vw, 4.75rem); font-weight: 750; letter-spacing: -0.035em; line-height: 1.02;
+    max-width: 16ch; margin-inline: auto;
+  }
+  .hero h1 em { font-style: normal; color: var(--accent); }
+  .lead { margin: 1.5rem auto 0; max-width: 40rem; font-size: clamp(1.075rem, 1rem + 0.45vw, 1.3rem); color: var(--ink-2); }
+  .hero-cta { display: flex; flex-wrap: wrap; justify-content: center; gap: 0.75rem; margin-top: 2.25rem; }
+
+  /* ---- logo animation ----------------------------------------------------- */
+  /* An eye's white stays light in both themes, so its pupil and outline stay
+     dark in both themes too. Theming them turned the pupils white in dark mode. */
+  .logo { --eye-line: #15171b; }
+  .logo .sclera { fill: var(--eye-white); stroke: var(--eye-line); stroke-width: 1.7; }
+  .logo .sclera-core { fill: var(--eye-white); stroke: var(--eye-line); stroke-width: 2.6; stroke-linejoin: round; }
+  .logo .pupil { fill: var(--eye-line); }
+  .logo .iris-sm { fill: var(--accent); }
+  .logo .scan { fill: none; stroke: var(--scan); stroke-width: 1.6; stroke-linecap: round; opacity: 0; }
+  .logo .pop, .logo .lid, .logo .look, .logo .core-lid { transform-box: fill-box; transform-origin: center; }
+  .logo .scan { transform-box: view-box; transform-origin: 80px 80px; }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .logo--live .pop { animation: pop 0.7s cubic-bezier(0.2, 0.9, 0.25, 1.25) both; animation-delay: calc(var(--i) * 70ms + 150ms); }
+    .logo--live .lid { animation: blink 7s ease-in-out infinite; animation-delay: calc(var(--i) * 530ms + 1.6s); }
+    .logo--live .look { animation: look 10s ease-in-out 1.2s infinite; }
+    .logo--live .core-lid { animation: blink-core 9s ease-in-out 3s infinite; }
+    .logo--live .scan { opacity: 1; animation: spin 16s linear infinite; }
+  }
+  @keyframes pop { from { transform: scale(0); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+  @keyframes blink { 0%, 91%, 100% { transform: scaleY(1); } 94.5% { transform: scaleY(0.08); } }
+  @keyframes blink-core { 0%, 95%, 100% { transform: scaleY(1); } 97% { transform: scaleY(0.06); } }
+  @keyframes look {
+    0%, 16% { transform: translate(0, 0); }
+    24%, 38% { transform: translate(7px, -2px); }
+    46%, 60% { transform: translate(-7px, 1.5px); }
+    68%, 100% { transform: translate(0, 0); }
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ---- terminal ---------------------------------------------------------- */
+  .term {
+    position: relative; margin: clamp(2.5rem, 6vw, 4rem) auto 0; max-width: 52rem; text-align: left;
+    background: var(--term-bg); color: var(--term-ink); border: 1px solid var(--term-line);
+    border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden;
+  }
+  .term-bar { display: flex; align-items: center; gap: 0.75rem; padding: 0.7rem 1rem; border-bottom: 1px solid var(--term-line); }
+  .term-dots { display: flex; gap: 6px; }
+  .term-dots span { width: 10px; height: 10px; border-radius: 50%; background: #2c323b; }
+  .term-title { font: 500 0.8125rem/1 var(--font-mono); color: var(--term-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .replay {
+    margin-left: auto; min-height: 36px; padding: 0 0.85rem; border-radius: 999px; cursor: pointer;
+    font: 500 0.8125rem/1 var(--font-mono); color: var(--term-ink); background: transparent; border: 1px solid var(--term-line);
+  }
+  .replay:hover { border-color: var(--term-dim); }
+  .term-body { overflow-x: auto; }
+  .term pre { margin: 0; padding: 1.1rem 1.25rem 1.4rem; font-size: clamp(0.78rem, 0.72rem + 0.25vw, 0.9rem); line-height: 1.75; }
+  .t-line { display: block; white-space: pre; }
+  @media (max-width: 640px) {
+    .t-line { white-space: pre-wrap; overflow-wrap: anywhere; padding-left: 4ch; text-indent: -4ch; }
+    .t-line .pad { display: none; }
+    .t-line .ms::before { content: " "; }
+  }
+  .t-gap { display: block; height: 0.6rem; }
+  .c-prompt { color: var(--term-dim); }
+  .c-cmd { color: var(--term-ink); font-weight: 600; }
+  .c-act { color: var(--term-ink); font-weight: 700; }
+  .c-target { color: var(--term-cyan); }
+  .c-dim { color: var(--term-dim); }
+  .c-add { color: var(--term-green); }
+  .c-del { color: var(--term-red); }
+  .c-warn { color: var(--term-yellow); }
+  .c-net { color: var(--term-magenta); }
+
+  /* Visible by default, so anything that captures the page without scrolling
+     to it sees the whole demo. The replay's backwards fill hides each line only
+     until its turn. */
+  .term.is-playing .t-line, .term.is-playing .t-gap { animation: line-in 0.32s ease-out var(--d, 0ms) both; }
+  @keyframes line-in { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+  @media (prefers-reduced-motion: reduce) {
+    .term.is-playing .t-line, .term.is-playing .t-gap { animation: none; }
+    .replay { display: none; }
+    html { scroll-behavior: auto; }
+  }
+
+  /* ---- stats ------------------------------------------------------------- */
+  .stats { padding-block: clamp(1.5rem, 3vw, 2.5rem) 0; }
+  .stats-grid {
+    display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0; padding: 0; list-style: none;
+    border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); overflow: hidden;
+  }
+  .stat { padding: 1.5rem 1.4rem; }
+  .stat + .stat { border-left: 1px solid var(--line); }
+  .stat-value { display: block; font-size: clamp(2.2rem, 1.6rem + 1.8vw, 3rem); font-weight: 700; letter-spacing: -0.03em; line-height: 1; }
+  .stat-label { display: block; margin-top: 0.6rem; font-weight: 600; }
+  .stat-note { display: block; margin-top: 0.25rem; font-size: 0.9rem; color: var(--ink-3); }
+  @media (max-width: 860px) {
+    .stats-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .stat + .stat { border-left: 0; }
+    .stat:nth-child(even) { border-left: 1px solid var(--line); }
+    .stat:nth-child(n + 3) { border-top: 1px solid var(--line); }
+  }
+  @media (max-width: 359px) {
+    .stats-grid { grid-template-columns: 1fr; }
+    .stat:nth-child(even) { border-left: 0; }
+    .stat + .stat { border-top: 1px solid var(--line); }
+  }
+
+  /* ---- sections ---------------------------------------------------------- */
+  .section { padding-block: clamp(3rem, 6vw, 4.75rem) 0; }
+  main > .section:last-child { padding-bottom: clamp(3rem, 6vw, 4.75rem); }
+  .section-head { max-width: 44rem; margin-bottom: clamp(2rem, 4vw, 3rem); }
+  .kicker { font: 600 0.8125rem/1 var(--font-mono); letter-spacing: 0.06em; text-transform: uppercase; color: var(--accent); margin-bottom: 0.9rem; }
+  .section h2 { font-size: clamp(1.9rem, 1.2rem + 2.6vw, 3rem); font-weight: 720; letter-spacing: -0.03em; }
+  .section-head p { margin-top: 1rem; font-size: 1.125rem; color: var(--ink-2); }
+
+  /* ---- chart ------------------------------------------------------------- */
+  .chart-card {
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: clamp(1.25rem, 3vw, 2rem); box-shadow: var(--shadow); margin: 0;
+  }
+  .chart-title { font-size: 1.125rem; font-weight: 650; }
+  .chart-sub { margin-top: 0.3rem; color: var(--ink-3); font-size: 0.95rem; }
+  .bars { margin: 1.75rem 0 0; padding: 0; list-style: none; display: grid; gap: 1.35rem; }
+  .bar-row { position: relative; display: grid; grid-template-columns: minmax(10rem, 15rem) 1fr; gap: 0.5rem 1.25rem; align-items: center; }
+  .bar-name { font-weight: 600; line-height: 1.3; }
+  .bar-name small { display: block; font-weight: 400; font-size: 0.875rem; color: var(--ink-3); }
+  .bar-track { position: relative; display: flex; align-items: center; gap: 0.6rem; min-height: 44px; }
+  .bar {
+    height: 22px; width: var(--w); min-width: 6px;
+    border-radius: 0 4px 4px 0; /* square at the baseline, rounded at the data end */
+    background: var(--chart-context);
+    transform-origin: left center;
+  }
+  .bar-row--hero .bar { background: var(--chart-hero); }
+  .bar-value { font: 600 0.95rem/1 var(--font-mono); color: var(--ink); white-space: nowrap; }
+  .bar-row--hero .bar-name { color: var(--ink); }
+  .baseline { position: absolute; left: 0; top: 6px; bottom: 6px; width: 1px; background: var(--line); }
+  .tip {
+    position: absolute; left: 0; bottom: calc(100% + 6px); z-index: 5; pointer-events: none;
+    background: var(--ink); color: var(--bg); font-size: 0.85rem; line-height: 1.4; padding: 0.5rem 0.7rem; border-radius: 8px;
+    opacity: 0; transform: translateY(4px); transition: opacity .12s, transform .12s; max-width: min(22rem, 90vw);
+  }
+  .bar-track:hover .tip { opacity: 1; transform: none; }
+  .chart-foot { margin-top: 1.75rem; padding-top: 1rem; border-top: 1px solid var(--line); font-size: 0.875rem; color: var(--ink-3); }
+  @media (prefers-reduced-motion: no-preference) {
+    .js .bars.is-visible .bar { animation: grow 0.9s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+    .js .bars.is-visible .bar-row:nth-child(2) .bar { animation-delay: 90ms; }
+    .js .bars.is-visible .bar-row:nth-child(3) .bar { animation-delay: 180ms; }
+  }
+  @keyframes grow { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+  @media (max-width: 640px) {
+    .bar-row { grid-template-columns: 1fr; }
+  }
+
+  /* ---- two-column explainer ---------------------------------------------- */
+  .split { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: clamp(1rem, 3vw, 1.5rem); margin-top: 1.5rem; }
+  @media (max-width: 860px) { .split { grid-template-columns: 1fr; } }
+  .panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 1.5rem; }
+  .panel h3 { font-size: 1.15rem; font-weight: 650; }
+  .panel p { margin-top: 0.6rem; color: var(--ink-2); }
+  .panel-tag { display: inline-block; margin-bottom: 0.8rem; font: 600 0.75rem/1 var(--font-mono); letter-spacing: 0.05em; text-transform: uppercase; color: var(--ink-3); }
+
+  /* ---- diagnoses --------------------------------------------------------- */
+  .diag-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr)); gap: 1rem; }
+  .diag { background: var(--term-bg); border: 1px solid var(--term-line); border-radius: var(--radius); color: var(--term-ink); display: flex; flex-direction: column; overflow: hidden; }
+  .diag-head { padding: 1rem 1.2rem 0.2rem; }
+  .diag-head h3 { font-size: 1.05rem; font-weight: 650; color: var(--term-ink); }
+  .diag-head p { margin-top: 0.35rem; font-size: 0.95rem; color: var(--term-dim); }
+  .diag-body { overflow-x: auto; }
+  .diag pre { margin: 0; padding: 0.9rem 1.2rem 1.2rem; font-size: 0.8125rem; line-height: 1.7; }
+
+  /* ---- omarchy pillars --------------------------------------------------- */
+  .pillars { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: clamp(1rem, 3vw, 1.5rem); }
+  @media (max-width: 960px) { .pillars { grid-template-columns: 1fr; } }
+  .pillar { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 1.6rem; }
+  .pillar-icon { width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center; margin-bottom: 1.1rem; background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); }
+  .pillar-icon svg { width: 22px; height: 22px; }
+  .pillar h3 { font-size: 1.2rem; font-weight: 650; }
+  .pillar p { margin-top: 0.7rem; color: var(--ink-2); }
+  .pillar .figure { margin-top: 1.1rem; font: 600 0.95rem/1.45 var(--font-sans); color: var(--ink); }
+
+  /* ---- comparison table -------------------------------------------------- */
+  .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+  table.compare { width: 100%; min-width: 40rem; border-collapse: collapse; font-size: 0.975rem; }
+  .compare th, .compare td { padding: 0.95rem 1.1rem; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }
+  .compare thead th { font-size: 0.875rem; font-weight: 650; color: var(--ink-2); background: var(--surface-2); }
+  .compare tbody tr:last-child th, .compare tbody tr:last-child td { border-bottom: 0; }
+  .compare tbody th { font-weight: 600; }
+  .compare .col-argus { background: color-mix(in srgb, var(--accent) 7%, transparent); }
+  .yes, .no, .part { display: inline-flex; align-items: center; gap: 0.4rem; font-weight: 600; }
+  .yes::before, .no::before, .part::before { font: 700 0.95rem/1 var(--font-mono); }
+  .yes::before { content: "✓"; color: var(--accent); }
+  .no::before { content: "–"; color: var(--ink-3); }
+  .part::before { content: "~"; color: var(--ink-3); }
+  .no, .part { color: var(--ink-2); font-weight: 500; }
+  .table-note { margin-top: 0.9rem; font-size: 0.875rem; color: var(--ink-3); }
+
+  /* ---- install ----------------------------------------------------------- */
+  .steps { display: grid; gap: 1rem; counter-reset: step; }
+  .step { display: grid; grid-template-columns: 2.5rem 1fr; gap: 1rem; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 1.35rem; }
+  .step::before {
+    counter-increment: step; content: counter(step);
+    width: 2.5rem; height: 2.5rem; border-radius: 50%; display: grid; place-items: center;
+    font: 700 1rem/1 var(--font-mono); color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent);
+  }
+  .step h3 { font-size: 1.1rem; font-weight: 650; }
+  .step p { margin-top: 0.35rem; color: var(--ink-2); }
+  .step > div { min-width: 0; }
+  .code { position: relative; margin-top: 0.9rem; background: var(--term-bg); border: 1px solid var(--term-line); border-radius: 10px; }
+  .code pre { margin: 0; padding: 0.95rem 5.5rem 0.95rem 1rem; overflow-x: auto; color: var(--term-ink); font-size: 0.875rem; line-height: 1.7; }
+  .copy {
+    position: absolute; top: 0.5rem; right: 0.5rem; min-height: 36px; padding: 0 0.8rem; border-radius: 8px; cursor: pointer;
+    font: 600 0.8125rem/1 var(--font-sans); color: var(--term-ink); background: #1b2028; border: 1px solid var(--term-line);
+  }
+  .copy:hover { border-color: var(--term-dim); }
+  .requirements { margin-top: 1.5rem; color: var(--ink-3); font-size: 0.95rem; }
+
+  /* ---- footer ------------------------------------------------------------ */
+  .site-footer { border-top: 1px solid var(--line); padding-block: 2.5rem 3rem; color: var(--ink-3); font-size: 0.95rem; }
+  .footer-grid { display: flex; flex-wrap: wrap; gap: 1rem 2rem; align-items: flex-start; justify-content: space-between; }
+  .site-footer .brand { font-size: 1rem; }
+  .site-footer p + p { margin-top: 0.35rem; }
+
+  @media (forced-colors: active) {
+    .bar { background: CanvasText; }
+    .bar-row--hero .bar { background: Highlight; }
+  }
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<!-- The mark: a central eye inside a ring of watching eyes. Argus Panoptes had a
+     hundred; after he died Hera set them in the peacock's tail. -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <radialGradient id="iris" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#f3c566"/>
+      <stop offset="34%" stop-color="#e3a93f"/>
+      <stop offset="40%" stop-color="#2cb6a1"/>
+      <stop offset="78%" stop-color="#0d8a76"/>
+      <stop offset="100%" stop-color="#075a4d"/>
+    </radialGradient>
+  </defs>
+</svg>
+
+<header class="site-header">
+  <nav class="wrap nav" aria-label="Primary">
+    <a class="brand" href="#top" aria-label="Argus home">
+      <svg viewBox="0 0 64 64" aria-hidden="true" focusable="false" class="logo">
+        <path class="sclera-core" d="M5 32 Q32 8 59 32 Q32 56 5 32Z"/>
+        <circle cx="32" cy="32" r="11.5" fill="url(#iris)"/>
+        <circle class="pupil" cx="32" cy="32" r="4.8"/>
+        <circle cx="28.5" cy="28.5" r="1.9" fill="#fff" opacity=".85"/>
+      </svg>
+      Argus
+    </a>
+    <ul class="nav-links" id="nav-links">
+      <li><a href="#how">How it works</a></li>
+      <li><a href="#why">Why clicks fail</a></li>
+      <li><a href="#omarchy">Only on Omarchy</a></li>
+      <li><a href="#compare">Compare</a></li>
+      <li><a href="#install">Install</a></li>
+    </ul>
+    <div class="nav-actions">
+      <button class="icon-btn" id="theme-toggle" type="button" aria-label="Switch to dark theme">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true" class="icon-moon"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z"/></svg>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true" class="icon-sun" hidden><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+      </button>
+      <button class="icon-btn menu-btn" id="menu-toggle" type="button" aria-controls="nav-links" aria-expanded="false" aria-label="Open menu">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+      </button>
+      <a class="btn btn-primary" href="#install">Get started</a>
+    </div>
+  </nav>
+</header>
+
+<main id="main" tabindex="-1">
+  <section class="hero wrap" id="top" aria-labelledby="hero-title">
+    <svg class="logo logo--live hero-mark" viewBox="0 0 160 160" role="img" aria-labelledby="logo-title">
+      <title id="logo-title">Argus: an eye within a ring of watching eyes</title>
+      <circle class="scan" cx="80" cy="80" r="75" stroke-dasharray="46 425"/>
+      <g>
+        <!-- ten watching eyes at radius 56, each blinking on its own clock -->
+        <g transform="rotate(0 80 80)"><g transform="translate(80 24)"><g class="pop" style="--i:0"><g class="lid" style="--i:0"><path class="sclera" d="M-9.5 0Q0-7 9.5 0Q0 7-9.5 0Z"/><circle class="iris-sm" r="3.5"/><circle class="pupil" r="1.55"/></g></g></g></g>
+        <g transform="rotate(36 80 80)"><g transform="translate(80 24)"><g class="pop" style="--i:1"><g class="lid" style="--i:6"><path class="sclera" d="M-9.5 0Q0-7 9.5 0Q0 7-9.5 0Z"/><circle class="iris-sm" r="3.5"/><circle class="pupil" r="1.55"/></g></g></g></g>
+        <g transform="rotate(72 80 80)"><g transform="translate(80 24)"><g class="pop" style="--i:2"><g class="lid" style="--i:3"><path class="sclera" d="M-9.5 0Q0-7 9.5 0Q0 7-9.5 0Z"/><circle class="iris-sm" r="3.5"/><circle class="pupil" r="1.55"/></g></g></g></g>
+        <g transform="rotate(108 80 80)"><g transform="translate(80 24)"><g class="pop" style="--i:3"><g class="lid" style="--i:8"><path class="sclera" d="M-9.5 0Q0-7 9.5 0Q0 7-9.5 0Z"/><circle class="iris-sm" r="3.5"/><circle class="pupil" r="1.55"/></g></g></g></g>
+        <g transform="rotate(144 80 80)"><g transform="translate(80 24)"><g class="pop" style="--i:4"><g class="lid" style="--i:1"><path class="sclera" d="M-9.5 0Q0-7 9.5 0Q0 7-9.5 0Z"/><circle class="iris-sm" r="3.5"/><circle class="pupil" r="1.55"/></g></g></g></g>
+        <g transform="rotate(180 80 80)"><g transform="translate(80 24)"><g class="pop" style="--i:5"><g class="lid" style="--i:5"><path class="sclera" d="M-9.5 0Q0-7 9.5 0Q0 7-9.5 0Z"/><circle class="iris-sm" r="3.5"/><circle class="pupil" r="1.55"/></g></g></g></g>
+        <g transform="rotate(216 80 80)"><g transform="translate(80 24)"><g class="pop" style="--i:6"><g class="lid" style="--i:9"><path class="sclera" d="M-9.5 0Q0-7 9.5 0Q0 7-9.5 0Z"/><circle class="iris-sm" r="3.5"/><circle class="pupil" r="1.55"/></g></g></g></g>
+        <g transform="rotate(252 80 80)"><g transform="translate(80 24)"><g class="pop" style="--i:7"><g class="lid" style="--i:2"><path class="sclera" d="M-9.5 0Q0-7 9.5 0Q0 7-9.5 0Z"/><circle class="iris-sm" r="3.5"/><circle class="pupil" r="1.55"/></g></g></g></g>
+        <g transform="rotate(288 80 80)"><g transform="translate(80 24)"><g class="pop" style="--i:8"><g class="lid" style="--i:7"><path class="sclera" d="M-9.5 0Q0-7 9.5 0Q0 7-9.5 0Z"/><circle class="iris-sm" r="3.5"/><circle class="pupil" r="1.55"/></g></g></g></g>
+        <g transform="rotate(324 80 80)"><g transform="translate(80 24)"><g class="pop" style="--i:9"><g class="lid" style="--i:4"><path class="sclera" d="M-9.5 0Q0-7 9.5 0Q0 7-9.5 0Z"/><circle class="iris-sm" r="3.5"/><circle class="pupil" r="1.55"/></g></g></g></g>
+      </g>
+      <g class="core-lid">
+        <clipPath id="core-clip"><path d="M40 80Q80 47 120 80Q80 113 40 80Z"/></clipPath>
+        <path class="sclera-core" d="M40 80Q80 47 120 80Q80 113 40 80Z"/>
+        <g clip-path="url(#core-clip)">
+          <g class="look">
+            <circle cx="80" cy="80" r="19" fill="url(#iris)"/>
+            <circle cx="80" cy="80" r="19" fill="none" stroke="#063f36" stroke-opacity=".35" stroke-width="1"/>
+            <circle cx="80" cy="80" r="13" fill="none" stroke="#fff" stroke-opacity=".12" stroke-width="1"/>
+            <circle class="pupil" cx="80" cy="80" r="7.4"/>
+            <circle cx="74.5" cy="74.5" r="2.8" fill="#fff" opacity=".9"/>
+          </g>
+        </g>
+        <path d="M40 80Q80 47 120 80Q80 113 40 80Z" fill="none" stroke="var(--eye-line)" stroke-width="2.6" stroke-linejoin="round"/>
+      </g>
+    </svg>
+
+    <p class="eyebrow"><span class="dot" aria-hidden="true"></span>Computer use for Omarchy</p>
+    <h1 id="hero-title">Your agent doesn’t use a computer. <em>It has one.</em></h1>
+    <p class="lead">Argus gives every coding agent on Omarchy many browsers at once. After each action it reports what changed, not what the page looks like, and when a click fails it tells the agent why.</p>
+    <div class="hero-cta">
+      <a class="btn btn-primary" href="#install">Get started</a>
+      <a class="btn btn-ghost" href="#how">See the numbers</a>
+    </div>
+
+    <div class="term" id="demo">
+      <div class="term-bar">
+        <span class="term-dots" aria-hidden="true"><span></span><span></span><span></span></span>
+        <span class="term-title">argus — checkout, lane 0</span>
+        <button class="replay" type="button" id="replay">Replay</button>
+      </div>
+      <div class="term-body" role="region" aria-label="Argus recovering from a blocked click" tabindex="0">
+<pre><span class="t-line" style="--d:0ms"><span class="c-prompt">$ </span><span class="c-cmd">argus click "button:Place order"</span></span><span class="t-line" style="--d:450ms"><span class="c-act">&gt; click</span> <span class="c-target">button:Place order</span></span><span class="t-line" style="--d:650ms">  <span class="c-del">x covered</span>  <span class="c-dim">button#pay</span></span><span class="t-line" style="--d:800ms">  <span class="c-dim">covered by</span> div#scrim  <span class="c-dim">z-index:9998 position:fixed</span></span><span class="t-line" style="--d:950ms">  <span class="c-dim">Another element is painted over the target. Dismiss the overlay, then retry.</span></span><span class="t-gap" style="--d:1250ms"></span><span class="t-line" style="--d:1600ms"><span class="c-prompt">$ </span><span class="c-cmd">argus click "button:Accept"</span></span><span class="t-line" style="--d:2050ms"><span class="c-act">&gt; click</span> <span class="c-target">button:Accept</span><span class="pad">                          </span><span class="c-dim ms">291ms</span></span><span class="t-line" style="--d:2200ms">  <span class="c-del">-</span> <span class="c-dim">“This site uses cookies.”  “Accept”</span></span><span class="t-gap" style="--d:2500ms"></span><span class="t-line" style="--d:2850ms"><span class="c-prompt">$ </span><span class="c-cmd">argus click "button:Place order"</span></span><span class="t-line" style="--d:3300ms"><span class="c-act">&gt; click</span> <span class="c-target">button:Place order</span><span class="pad">                     </span><span class="c-dim ms">289ms</span></span><span class="t-line" style="--d:3450ms">  <span class="c-add">+</span> “Order confirmed”  “Order placed. Confirmation sent.”</span><span class="t-line" style="--d:3600ms">  <span class="c-net">~</span> GET /api/receipt  <span class="c-del">Failed to fetch</span>  <span class="c-dim">1ms</span></span><span class="t-line" style="--d:3750ms">  <span class="c-dim">settled 251ms · network-idle+dom-quiet</span></span></pre>
+      </div>
+    </div>
+  </section>
+
+  <section class="stats wrap" aria-label="Measured results">
+    <ul class="stats-grid">
+      <li class="stat"><span class="stat-value">~105</span><span class="stat-label">tokens per click</span><span class="stat-note">vs 1,334 for a 1280×800&nbsp;screenshot</span></li>
+      <li class="stat"><span class="stat-value">12</span><span class="stat-label">browsers in 4.9&nbsp;GB</span><span class="stat-note">13.3&nbsp;GB as separate sessions</span></li>
+      <li class="stat"><span class="stat-value">542</span><span class="stat-label">tokens for all of Omarchy</span><span class="stat-note">vs 15,031 listing every command</span></li>
+      <li class="stat"><span class="stat-value">75</span><span class="stat-label">assertions</span><span class="stat-note">run against planted defects</span></li>
+    </ul>
+  </section>
+
+  <section class="section wrap" id="how" aria-labelledby="how-title">
+    <div class="section-head">
+      <p class="kicker">How it works</p>
+      <h2 id="how-title">Report what changed, not what is.</h2>
+      <p>Most tools answer “what does the page look like?”, so the agent looks again after every action and works out the difference itself. Argus answers “what did my action do?”, which is smaller and says more, because it names the cause.</p>
+    </div>
+
+    <figure class="chart-card" aria-labelledby="chart-title">
+      <figcaption>
+        <p class="chart-title" id="chart-title">What it costs an agent to see the result of one click</p>
+        <p class="chart-sub">Tokens, on news.ycombinator.com. Fewer is better.</p>
+      </figcaption>
+      <ul class="bars" id="bars" aria-hidden="true">
+        <li class="bar-row">
+          <span class="bar-name">Screenshot<small>1280×800, then look again</small></span>
+          <span class="bar-track"><span class="baseline"></span><span class="bar" style="--w:calc(100% - 5rem)"></span><span class="bar-value">1,334</span><span class="tip">1,334 visual tokens: ⌈1280/28⌉ × ⌈800/28⌉, from Claude’s published image formula</span></span>
+        </li>
+        <li class="bar-row">
+          <span class="bar-name">Re-read the page<small>the whole text, again</small></span>
+          <span class="bar-track"><span class="baseline"></span><span class="bar" style="--w:calc((100% - 5rem) * 0.795)"></span><span class="bar-value">~1,061</span><span class="tip">4,244 characters of page text, estimated at 4 characters per token</span></span>
+        </li>
+        <li class="bar-row bar-row--hero">
+          <span class="bar-name">Argus delta<small>only what the click changed</small></span>
+          <span class="bar-track"><span class="baseline"></span><span class="bar" style="--w:calc((100% - 5rem) * 0.079)"></span><span class="bar-value">~105</span><span class="tip">421 characters, estimated at 4 characters per token</span></span>
+        </li>
+      </ul>
+      <!-- The hiding lives on a wrapper: visually-hidden cannot size a <table>,
+           which lays out to its content and widened the page by 149px on phones. -->
+      <div class="visually-hidden">
+      <table>
+        <caption>Tokens to observe the result of one click</caption>
+        <thead><tr><th scope="col">Method</th><th scope="col">Tokens</th><th scope="col">Basis</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">Screenshot, 1280×800</th><td>1,334</td><td>Published image formula</td></tr>
+          <tr><th scope="row">Re-read the page text</th><td>about 1,061</td><td>4,244 characters, 4 per token</td></tr>
+          <tr><th scope="row">Argus delta</th><td>about 105</td><td>421 characters, 4 per token</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p class="chart-foot">Screenshot cost is exact: ⌈width/28⌉ × ⌈height/28⌉ visual tokens on current Claude models. Text figures are estimates at about 4 characters per token.</p>
+    </figure>
+
+    <div class="split">
+      <div class="panel">
+        <span class="panel-tag">A screenshot</span>
+        <h3>Shows the page after the click.</h3>
+        <p>It can’t say the click hit a cookie banner, that a request failed, or that nothing changed at all. The agent has to infer that from pixels, then pay again to check.</p>
+      </div>
+      <div class="panel">
+        <span class="panel-tag">An Argus delta</span>
+        <h3>Says what the click caused.</h3>
+        <p>Text that appeared or left, form fields that filled, requests that failed, console errors, layout that shifted, and when the page settled, measured in the browser rather than guessed.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="section wrap" id="why" aria-labelledby="why-title">
+    <div class="section-head">
+      <p class="kicker">Why clicks fail</p>
+      <h2 id="why-title">A failed click comes with a diagnosis.</h2>
+      <p>Argus finds elements the way a person describes them, by role and name, and checks what a real click would hit. When it can’t act, it says what’s in the way.</p>
+    </div>
+    <div class="diag-grid">
+      <article class="diag">
+        <div class="diag-head"><h3>Something is on top of it</h3><p>Names the element painted over the target.</p></div>
+        <div class="diag-body" role="region" aria-label="Covered element example" tabindex="0"><pre><span class="c-act">&gt; click</span> <span class="c-target">button:Place order</span>
+  <span class="c-del">x covered</span>  <span class="c-dim">button#pay</span>
+  <span class="c-dim">covered by</span> div#scrim
+  <span class="c-dim">z-index:9998 position:fixed</span></pre></div>
+      </article>
+      <article class="diag">
+        <div class="diag-head"><h3>A question was asked</h3><p>Dialogs are answered safely and reported, never silently.</p></div>
+        <div class="diag-body" role="region" aria-label="Dialog example" tabindex="0"><pre><span class="c-act">&gt; click</span> <span class="c-target">button:Delete account</span>
+  <span class="c-warn">? confirm</span>  “Delete your account?”
+    -&gt; <span class="c-del">dismissed</span>
+  <span class="c-dim">(argus dialog accept, then retry)</span></pre></div>
+      </article>
+      <article class="diag">
+        <div class="diag-head"><h3>Two things share a name</h3><p>Refuses to guess and lists the candidates.</p></div>
+        <div class="diag-body" role="region" aria-label="Ambiguous element example" tabindex="0"><pre><span class="c-act">&gt; click</span> <span class="c-target">button:Remove</span>
+  <span class="c-del">x ambiguous</span>
+  <span class="c-dim">[0]</span> remove  <span class="c-dim">button.row-remove</span>
+  <span class="c-dim">[1]</span> remove  <span class="c-dim">button.row-remove</span></pre></div>
+      </article>
+      <article class="diag">
+        <div class="diag-head"><h3>The name is slightly off</h3><p>Suggests what does exist.</p></div>
+        <div class="diag-body" role="region" aria-label="Not found example" tabindex="0"><pre><span class="c-act">&gt; click</span> <span class="c-target">button:Place ordr</span>
+  <span class="c-del">x not-found</span>
+  <span class="c-dim">did you mean:</span> button:place order</pre></div>
+      </article>
+      <article class="diag">
+        <div class="diag-head"><h3>It can’t be clicked yet</h3><p>Disabled, hidden, zero-size, or offscreen, each named.</p></div>
+        <div class="diag-body" role="region" aria-label="Disabled example" tabindex="0"><pre><span class="c-act">&gt; click</span> <span class="c-target">button:Pay later</span>
+  <span class="c-del">x disabled</span>  <span class="c-dim">button#later</span>
+  <span class="c-dim">something upstream must</span>
+  <span class="c-dim">enable it first</span></pre></div>
+      </article>
+      <article class="diag">
+        <div class="diag-head"><h3>A picker would have opened</h3><p>No file dialog opens. Files go straight in.</p></div>
+        <div class="diag-body" role="region" aria-label="File picker example" tabindex="0"><pre><span class="c-act">&gt; click</span> <span class="c-target">label:Upload avatar</span>
+  <span class="c-warn">? file-chooser</span>  input#avatar
+<span class="c-prompt">$ </span><span class="c-cmd">argus upload "Upload avatar" me.png</span>
+  <span class="c-add">+</span> “avatar: me.png”</pre></div>
+      </article>
+    </div>
+  </section>
+
+  <section class="section wrap" id="omarchy" aria-labelledby="omarchy-title">
+    <div class="section-head">
+      <p class="kicker">Only on Omarchy</p>
+      <h2 id="omarchy-title">Built into the machine, not bolted onto a browser.</h2>
+      <p>A browser extension only sees its tab, and a library only sees its project. Omarchy is the whole desktop, so Argus can do three things they can’t.</p>
+    </div>
+    <div class="pillars">
+      <article class="pillar">
+        <div class="pillar-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h10M4 18h7"/><path d="m16 15 3 3-3 3"/></svg></div>
+        <h3>The OS is already an API</h3>
+        <p>440 of Omarchy’s 441 commands describe themselves. Argus serves them to agents in groups, so changing a theme or a sound output is a function call, not a settings screen to click through.</p>
+        <p class="figure">542 tokens, instead of 15,031</p>
+      </article>
+      <article class="pillar">
+        <div class="pillar-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/><path d="m9 10.5 2 2 4-4"/></svg></div>
+        <h3>The compositor is watching</h3>
+        <p>On a desk lane, Hyprland itself reports a popup opening as a new window or a page going fullscreen. The page can’t see those, so a browser extension can’t either.</p>
+        <p class="figure">window opened · resized · fullscreen</p>
+      </article>
+      <article class="pillar">
+        <div class="pillar-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="12" height="9" rx="1.5"/><rect x="10" y="10" width="12" height="9" rx="1.5"/></svg></div>
+        <h3>A desk no one sees</h3>
+        <p>Real, headful browsers on a virtual monitor. <code>argus peek</code> brings the desk onto your screen, and a second peek sends it back. Agent windows never take your keyboard focus.</p>
+        <p class="figure">0 focus changes in 45 compositor events</p>
+      </article>
+    </div>
+  </section>
+
+  <section class="section wrap" id="compare" aria-labelledby="compare-title">
+    <div class="section-head">
+      <p class="kicker">Compare</p>
+      <h2 id="compare-title">What an agent is told after it acts.</h2>
+      <p>Measured where we could, and marked partial where the answer is “you can write it yourself.”</p>
+    </div>
+    <div class="table-wrap" role="region" aria-labelledby="compare-title" tabindex="0">
+      <table class="compare">
+        <thead>
+          <tr>
+            <th scope="col">After an action, the agent learns…</th>
+            <th scope="col">Screenshot-driven</th>
+            <th scope="col">Scripted Playwright</th>
+            <th scope="col" class="col-argus">Argus</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><th scope="row">What text appeared or disappeared</th><td><span class="no">Inferred from pixels</span></td><td><span class="part">If you query for it</span></td><td class="col-argus"><span class="yes">Reported</span></td></tr>
+          <tr><th scope="row">Which request failed</th><td><span class="no">Not visible</span></td><td><span class="part">If you listen for it</span></td><td class="col-argus"><span class="yes">Reported</span></td></tr>
+          <tr><th scope="row">Why a click didn’t land</th><td><span class="no">Not visible</span></td><td><span class="part">Actionability errors</span></td><td class="col-argus"><span class="yes">Named blocker</span></td></tr>
+          <tr><th scope="row">That a confirm dialog was answered</th><td><span class="part">If it’s on screen</span></td><td><span class="part">If you add a handler</span></td><td class="col-argus"><span class="yes">Reported, safe default</span></td></tr>
+          <tr><th scope="row">Contrast and tap-target problems</th><td><span class="no">Not measured</span></td><td><span class="no">Not built in</span></td><td class="col-argus"><span class="yes">Audited</span></td></tr>
+          <tr><th scope="row">A native window opening</th><td><span class="part">If it’s on screen</span></td><td><span class="no">Outside the page</span></td><td class="col-argus"><span class="yes">From Hyprland</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="table-note">Screenshot-driven means an agent that acts on coordinates and looks at images. Scripted Playwright means hand-written test code; its actionability checks do report when another element would receive the click.</p>
+  </section>
+
+  <section class="section wrap" id="install" aria-labelledby="install-title">
+    <div class="section-head">
+      <p class="kicker">Install</p>
+      <h2 id="install-title">Nothing to download.</h2>
+      <p>Argus uses what Omarchy already ships: Chromium, which includes chromedriver, plus curl, jq, and Hyprland. There’s no Playwright, no Node, and no second copy of a browser.</p>
+    </div>
+    <div class="steps">
+      <div class="step">
+        <div>
+          <h3>Drive a browser</h3>
+          <p>Every action returns what it changed.</p>
+          <div class="code">
+            <pre id="code-1"><code>argus open https://example.com
+argus click "link:Learn more"
+argus audit</code></pre>
+            <button class="copy" type="button" data-copy="code-1">Copy</button>
+          </div>
+        </div>
+      </div>
+      <div class="step">
+        <div>
+          <h3>Give it a desk</h3>
+          <p>A real browser on a virtual monitor. Peek when you want to watch.</p>
+          <div class="code">
+            <pre id="code-2"><code>argus desk up
+argus --desk open https://example.com
+argus peek</code></pre>
+            <button class="copy" type="button" data-copy="code-2">Copy</button>
+          </div>
+        </div>
+      </div>
+      <div class="step">
+        <div>
+          <h3>Hand it to your agent</h3>
+          <p>Any agent that speaks MCP gets the browser and the Omarchy command catalogue.</p>
+          <div class="code">
+            <pre id="code-3"><code>{
+  "mcpServers": {
+    "argus": { "command": "/home/you/Work/argus/bin/argus-mcp" }
+  }
+}</code></pre>
+            <button class="copy" type="button" data-copy="code-3">Copy</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <p class="requirements">Tested on Hyprland 0.56 with Chromium 152. Desk lanes need a Hyprland session.</p>
+  </section>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap footer-grid">
+    <div>
+      <a class="brand" href="#top">
+        <svg viewBox="0 0 64 64" aria-hidden="true" focusable="false" class="logo">
+          <path class="sclera-core" d="M5 32 Q32 8 59 32 Q32 56 5 32Z"/>
+          <circle cx="32" cy="32" r="11.5" fill="url(#iris)"/>
+          <circle class="pupil" cx="32" cy="32" r="4.8"/>
+        </svg>
+        Argus
+      </a>
+      <p>Computer use for Omarchy.</p>
+    </div>
+    <div>
+      <p>Named for Argus Panoptes, the hundred-eyed watchman who never slept.</p>
+      <p>Every number here was measured on one Omarchy machine. The method is in <code>docs/performance.md</code>, with the full record in <code>docs/measurements.md</code>.</p>
+    </div>
+  </div>
+</footer>
+
+<p class="visually-hidden" aria-live="polite" id="announce"></p>
+
+<script>
+  (function () {
+    var root = document.documentElement;
+    var reduce = window.matchMedia("(prefers-reduced-motion: reduce)");
+
+    // ---- theme --------------------------------------------------------------
+    var toggle = document.getElementById("theme-toggle");
+    var moon = toggle.querySelector(".icon-moon");
+    var sun = toggle.querySelector(".icon-sun");
+    var system = window.matchMedia("(prefers-color-scheme: dark)");
+    function current() {
+      var set = root.getAttribute("data-theme");
+      return set || (system.matches ? "dark" : "light");
+    }
+    function paint() {
+      var dark = current() === "dark";
+      // The attribute, not the .hidden property: SVGElement has no hidden IDL
+      // attribute, so `svg.hidden = true` only sets an expando nothing reads.
+      moon.toggleAttribute("hidden", dark);
+      sun.toggleAttribute("hidden", !dark);
+      toggle.setAttribute("aria-label", dark ? "Switch to light theme" : "Switch to dark theme");
+    }
+    toggle.addEventListener("click", function () {
+      var next = current() === "dark" ? "light" : "dark";
+      root.setAttribute("data-theme", next);
+      try { localStorage.setItem("argus-theme", next); } catch (e) {}
+      paint();
+    });
+    system.addEventListener("change", paint);
+    paint();
+
+    // ---- mobile menu ----------------------------------------------------------
+    var menu = document.getElementById("menu-toggle");
+    var links = document.getElementById("nav-links");
+    function setMenu(open) {
+      menu.setAttribute("aria-expanded", String(open));
+      menu.setAttribute("aria-label", open ? "Close menu" : "Open menu");
+      links.setAttribute("data-open", String(open));
+    }
+    menu.addEventListener("click", function () { setMenu(menu.getAttribute("aria-expanded") !== "true"); });
+    links.addEventListener("click", function (e) { if (e.target.closest("a")) setMenu(false); });
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape" && menu.getAttribute("aria-expanded") === "true") { setMenu(false); menu.focus(); }
+    });
+
+    // ---- terminal replay --------------------------------------------------------
+    // Space for every line is reserved from the start; lines only fade in, so the
+    // replay never shifts the layout around it.
+    var term = document.getElementById("demo");
+    function play() {
+      if (reduce.matches) return;
+      term.classList.remove("is-playing");
+      void term.offsetWidth;
+      term.classList.add("is-playing");
+    }
+    document.getElementById("replay").addEventListener("click", play);
+    if ("IntersectionObserver" in window) {
+      var seen = new IntersectionObserver(function (entries) {
+        if (entries[0].isIntersecting) { play(); seen.disconnect(); }
+      }, { threshold: 0, rootMargin: "0px 0px -20% 0px" });
+      seen.observe(term);
+    } else {
+      play();
+    }
+
+    // ---- chart --------------------------------------------------------------------
+    var bars = document.getElementById("bars");
+    if ("IntersectionObserver" in window) {
+      var chart = new IntersectionObserver(function (entries) {
+        if (entries[0].isIntersecting) { bars.classList.add("is-visible"); chart.disconnect(); }
+      }, { threshold: 0.4 });
+      chart.observe(bars);
+    }
+
+    // ---- copy ---------------------------------------------------------------------
+    var announce = document.getElementById("announce");
+    document.querySelectorAll("[data-copy]").forEach(function (button) {
+      button.addEventListener("click", function () {
+        var text = document.getElementById(button.getAttribute("data-copy")).innerText;
+        var done = function () {
+          button.textContent = "Copied";
+          announce.textContent = "Copied to clipboard";
+          setTimeout(function () { button.textContent = "Copy"; announce.textContent = ""; }, 1600);
+        };
+        if (navigator.clipboard && window.isSecureContext) {
+          navigator.clipboard.writeText(text).then(done, function () {});
+        } else {
+          var area = document.createElement("textarea");
+          area.value = text;
+          area.setAttribute("readonly", "");
+          area.style.position = "fixed";
+          area.style.opacity = "0";
+          document.body.appendChild(area);
+          area.select();
+          try { document.execCommand("copy"); done(); } catch (e) {}
+          area.remove();
+        }
+      });
+    });
+  })();
+</script>
+</body>
+</html>

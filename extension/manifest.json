@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "Argus",
+  "version": "0.1.1",
+  "description": "Lets argus drive tabs it opens in this browser, with your logins. It never touches tabs it did not open.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEApIF7ca/5OX4AjU+AuMddseiJHMyncOz790czR1Cyyp1+sjjAK3KYNPAXiKrcUDcVDF8tl8bE6PLo8D8BFvJRb6hrAphMAe6EVH3QnMzq+xfFnic8lFTMK38d+8USvL1pxjIp/b9eUSkk8v7z9n0G4Qs/NAgXt84RoYqCYvSw+h0AwZnk3yetNuEnbWl8paUEBdVTy4Itr+9o3O2nWFpM/4V58batCvQtP9kdzVNfVQXnere2H2T0MvYwPGlAo9lPMUEk1tsr/NbxULVBIt7/t3ChFsKurE17xSkQVSVCeFqAJ5J2FcShihNVe7RPOdnMzCEUWGdNtG8CbU+gL/InGwIDAQAB",
+  "minimum_chrome_version": "116",
+  "background": {
+    "service_worker": "background.js"
+  },
+  "permissions": [
+    "debugger",
+    "tabs",
+    "tabGroups",
+    "nativeMessaging",
+    "storage"
+  ]
+}

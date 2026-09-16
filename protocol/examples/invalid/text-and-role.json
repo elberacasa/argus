@@ -1,0 +1,1 @@
+{"about":"A text target is not a role target","rejectedAt":"/params/target","message":{"jsonrpc":"2.0","id":1,"method":"scene.find","params":{"lane":"l1","target":{"text":"Hi","role":"button"}}}}

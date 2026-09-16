@@ -1,0 +1,71 @@
+<!-- Argus mark: an eye within a ring of watching eyes. -->
+<svg xmlns="http://www.w3.org/2000/svg" class="logo logo--live" viewBox="0 0 160 160" width="160" height="160" role="img" aria-labelledby="logo-title">
+<defs><radialGradient id="iris" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#f3c566"/>
+      <stop offset="34%" stop-color="#e3a93f"/>
+      <stop offset="40%" stop-color="#2cb6a1"/>
+      <stop offset="78%" stop-color="#0d8a76"/>
+      <stop offset="100%" stop-color="#075a4d"/>
+    </radialGradient></defs>
+<style>
+/* An app-icon tile, so the mark reads the same on light and dark pages. */
+.logo { --eye-white: #ebe8e0; --accent: #3ccbb8; --scan: rgba(60, 203, 184, 0.55); }
+.tile { fill: #101418; stroke: rgba(255, 255, 255, 0.09); stroke-width: 1; }
+  .logo { --eye-line: #15171b; }
+  .logo .sclera { fill: var(--eye-white); stroke: var(--eye-line); stroke-width: 1.7; }
+  .logo .sclera-core { fill: var(--eye-white); stroke: var(--eye-line); stroke-width: 2.6; stroke-linejoin: round; }
+  .logo .pupil { fill: var(--eye-line); }
+  .logo .iris-sm { fill: var(--accent); }
+  .logo .scan { fill: none; stroke: var(--scan); stroke-width: 1.6; stroke-linecap: round; opacity: 0; }
+  .logo .pop, .logo .lid, .logo .look, .logo .core-lid { transform-box: fill-box; transform-origin: center; }
+  .logo .scan { transform-box: view-box; transform-origin: 80px 80px; }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .logo--live .pop { animation: pop 0.7s cubic-bezier(0.2, 0.9, 0.25, 1.25) both; animation-delay: calc(var(--i) * 70ms + 150ms); }
+    .logo--live .lid { animation: blink 7s ease-in-out infinite; animation-delay: calc(var(--i) * 530ms + 1.6s); }
+    .logo--live .look { animation: look 10s ease-in-out 1.2s infinite; }
+    .logo--live .core-lid { animation: blink-core 9s ease-in-out 3s infinite; }
+    .logo--live .scan { opacity: 1; animation: spin 16s linear infinite; }
+  }
+  @keyframes pop { from { transform: scale(0); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+  @keyframes blink { 0%, 91%, 100% { transform: scaleY(1); } 94.5% { transform: scaleY(0.08); } }
+  @keyframes blink-core { 0%, 95%, 100% { transform: scaleY(1); } 97% { transform: scaleY(0.06); } }
+  @keyframes look {
+    0%, 16% { transform: translate(0, 0); }
+    24%, 38% { transform: translate(7px, -2px); }
+    46%, 60% { transform: translate(-7px, 1.5px); }
+    68%, 100% { transform: translate(0, 0); }
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+      <title id="logo-title">Argus: an eye within a ring of watching eyes</title>
+      <rect class="tile" x="0.5" y="0.5" width="159" height="159" rx="36"/>
+      <circle class="scan" cx="80" cy="80" r="75" stroke-dasharray="46 425"/>
+      <g>
+        <!-- ten watching eyes at radius 56, each blinking on its own clock -->
+        <g transform="rotate(0 80 80)"><g transform="translate(80 24)"><g class="pop" style="--i:0"><g class="lid" style="--i:0"><path class="sclera" d="M-9.5 0Q0-7 9.5 0Q0 7-9.5 0Z"/><circle class="iris-sm" r="3.5"/><circle class="pupil" r="1.55"/></g></g></g></g>
+        <g transform="rotate(36 80 80)"><g transform="translate(80 24)"><g class="pop" style="--i:1"><g class="lid" style="--i:6"><path class="sclera" d="M-9.5 0Q0-7 9.5 0Q0 7-9.5 0Z"/><circle class="iris-sm" r="3.5"/><circle class="pupil" r="1.55"/></g></g></g></g>
+        <g transform="rotate(72 80 80)"><g transform="translate(80 24)"><g class="pop" style="--i:2"><g class="lid" style="--i:3"><path class="sclera" d="M-9.5 0Q0-7 9.5 0Q0 7-9.5 0Z"/><circle class="iris-sm" r="3.5"/><circle class="pupil" r="1.55"/></g></g></g></g>
+        <g transform="rotate(108 80 80)"><g transform="translate(80 24)"><g class="pop" style="--i:3"><g class="lid" style="--i:8"><path class="sclera" d="M-9.5 0Q0-7 9.5 0Q0 7-9.5 0Z"/><circle class="iris-sm" r="3.5"/><circle class="pupil" r="1.55"/></g></g></g></g>
+        <g transform="rotate(144 80 80)"><g transform="translate(80 24)"><g class="pop" style="--i:4"><g class="lid" style="--i:1"><path class="sclera" d="M-9.5 0Q0-7 9.5 0Q0 7-9.5 0Z"/><circle class="iris-sm" r="3.5"/><circle class="pupil" r="1.55"/></g></g></g></g>
+        <g transform="rotate(180 80 80)"><g transform="translate(80 24)"><g class="pop" style="--i:5"><g class="lid" style="--i:5"><path class="sclera" d="M-9.5 0Q0-7 9.5 0Q0 7-9.5 0Z"/><circle class="iris-sm" r="3.5"/><circle class="pupil" r="1.55"/></g></g></g></g>
+        <g transform="rotate(216 80 80)"><g transform="translate(80 24)"><g class="pop" style="--i:6"><g class="lid" style="--i:9"><path class="sclera" d="M-9.5 0Q0-7 9.5 0Q0 7-9.5 0Z"/><circle class="iris-sm" r="3.5"/><circle class="pupil" r="1.55"/></g></g></g></g>
+        <g transform="rotate(252 80 80)"><g transform="translate(80 24)"><g class="pop" style="--i:7"><g class="lid" style="--i:2"><path class="sclera" d="M-9.5 0Q0-7 9.5 0Q0 7-9.5 0Z"/><circle class="iris-sm" r="3.5"/><circle class="pupil" r="1.55"/></g></g></g></g>
+        <g transform="rotate(288 80 80)"><g transform="translate(80 24)"><g class="pop" style="--i:8"><g class="lid" style="--i:7"><path class="sclera" d="M-9.5 0Q0-7 9.5 0Q0 7-9.5 0Z"/><circle class="iris-sm" r="3.5"/><circle class="pupil" r="1.55"/></g></g></g></g>
+        <g transform="rotate(324 80 80)"><g transform="translate(80 24)"><g class="pop" style="--i:9"><g class="lid" style="--i:4"><path class="sclera" d="M-9.5 0Q0-7 9.5 0Q0 7-9.5 0Z"/><circle class="iris-sm" r="3.5"/><circle class="pupil" r="1.55"/></g></g></g></g>
+      </g>
+      <g class="core-lid">
+        <clipPath id="core-clip"><path d="M40 80Q80 47 120 80Q80 113 40 80Z"/></clipPath>
+        <path class="sclera-core" d="M40 80Q80 47 120 80Q80 113 40 80Z"/>
+        <g clip-path="url(#core-clip)">
+          <g class="look">
+            <circle cx="80" cy="80" r="19" fill="url(#iris)"/>
+            <circle cx="80" cy="80" r="19" fill="none" stroke="#063f36" stroke-opacity=".35" stroke-width="1"/>
+            <circle cx="80" cy="80" r="13" fill="none" stroke="#fff" stroke-opacity=".12" stroke-width="1"/>
+            <circle class="pupil" cx="80" cy="80" r="7.4"/>
+            <circle cx="74.5" cy="74.5" r="2.8" fill="#fff" opacity=".9"/>
+          </g>
+        </g>
+        <path d="M40 80Q80 47 120 80Q80 113 40 80Z" fill="none" stroke="#15171b" stroke-width="2.6" stroke-linejoin="round"/>
+      </g>
+    </svg>

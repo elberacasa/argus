@@ -1,0 +1,4 @@
+{"about": "One call, six parallel lanes: the UI/UX loop", "message": {"jsonrpc":"2.0","id":9,"method":"sweep","params":{"name":"checkout",
+  "steps":[{"open":"http://localhost:5173/checkout"},{"click":"button:Place order","expect":{"appears":"Order confirmed"}}],
+  "across":{"viewports":[{"w":375,"h":812},{"w":768,"h":1024},{"w":1440,"h":900}],"colorScheme":["light","dark"]},
+  "check":["a11y","layout"]}}}

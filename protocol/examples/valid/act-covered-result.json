@@ -1,0 +1,9 @@
+{"about": "A covered click is a successful call with ok:false and a diagnosis, never a silent success", "result": "act",
+ "message": {"jsonrpc":"2.0","id":7,"result":{"ok":false,"ms":214,"tokensEst":96,"steps":[
+  {"i":0,"verb":"click","ok":false,
+   "target":{"ref":"e0.131","role":"button","name":"Place order","bounds":{"x":540,"y":610,"w":200,"h":44},"frames":[0],"shadow":null,
+             "reach":{"blocked":{"ref":"e0.402","role":"dialog","name":"Cookies"}}},
+   "match":"exact","observation":{"ms":3,"effect":"none"},
+   "diagnosis":{"reason":"covered","hint":"Dismiss dialog 'Cookies' (e0.402) first.","blocker":{"ref":"e0.402","role":"dialog","name":"Cookies"}},
+   "evidence":[{"image":"/run/user/1000/argus/evidence/l1-7-0.png","w":320,"h":180,"tokens":84}]}
+ ]}}}

@@ -1,0 +1,5 @@
+{"about": "A failing run names the step and the diagnosis", "result": "run", "message": {"jsonrpc":"2.0","id":5,"result":{"name":"login","verdict":"fail","failedAt":1,"ms":880,"trace":"t-20260916-0005","steps":[
+  {"i":0,"verb":"open","ok":true,"observation":{"ms":610,"url":{"from":"about:blank","to":"http://localhost:5173/login"}}},
+  {"i":1,"verb":"click","ok":false,"observation":{"ms":270,"console":[{"level":"error","text":"TypeError: user is undefined"}],"expect":{"held":false,"failed":[{"condition":"appears 'Welcome'","actual":null}]}},
+   "diagnosis":{"reason":"expectation-failed","hint":"'Welcome' never appeared; a TypeError fired during the click.","failed":[{"condition":"appears 'Welcome'","actual":null}]}}
+ ]}}}

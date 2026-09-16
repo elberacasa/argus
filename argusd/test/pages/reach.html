@@ -1,0 +1,44 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Reach</title>
+<style>
+  body { font: 16px system-ui; margin: 24px; }
+  .tall { height: 1600px; }
+  iframe { width: 420px; height: 140px; border: 0; }
+</style>
+<h1>Reach</h1>
+<p id="log">Nothing yet.</p>
+
+<!-- A control inside an open shadow root. -->
+<shadow-card></shadow-card>
+
+<!-- A control inside a same-origin frame. -->
+<iframe title="Frame" srcdoc="<button onclick=&quot;parent.document.getElementById('log').textContent='Clicked in frame.'&quot;>Frame button</button>"></iframe>
+
+<!-- Appears after a delay: a wait, not a sleep. -->
+<button id="slow">Load data</button>
+
+<div class="tall"></div>
+<button id="far" onclick="document.getElementById('log').textContent='Clicked far below.'">Far below</button>
+
+<label>Plan
+  <select id="plan"><option>Free</option><option>Pro</option></select>
+</label>
+<input id="name" aria-label="Full name">
+
+<script>
+  customElements.define("shadow-card", class extends HTMLElement {
+    connectedCallback() {
+      const root = this.attachShadow({ mode: "open" });
+      root.innerHTML = '<button>Shadow button</button>';
+      root.querySelector("button").onclick = () => { document.getElementById("log").textContent = "Clicked in shadow."; };
+    }
+  });
+  document.getElementById("slow").onclick = () => {
+    setTimeout(() => {
+      const p = document.createElement("p");
+      p.textContent = "Data loaded after a delay.";
+      document.body.insertBefore(p, document.getElementById("slow"));
+    }, 700);
+  };
+</script>

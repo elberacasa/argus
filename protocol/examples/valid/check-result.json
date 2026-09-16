@@ -1,0 +1,4 @@
+{"about": "Findings use standard rule ids", "result": "check", "message": {"jsonrpc":"2.0","id":4,"result":{"score":84,"scanned":212,"tokensEst":140,"findings":[
+  {"rule":"contrast","category":"a11y","severity":"error","hint":"Text below WCAG AA contrast.","count":2,"examples":[{"ref":"e0.33","text":"Terms","detail":{"contrast":2.1,"required":4.5}}]},
+  {"rule":"failed-request","category":"runtime","severity":"error","hint":"A request failed.","count":1,"examples":[{"detail":{"url":"/api/cart","status":500}}]}
+ ]}}}

@@ -1,0 +1,44 @@
+#!/bin/bash
+
+# Build a machine-readable manifest of every Omarchy command from the
+# `# omarchy:` headers the commands already carry. Omarchy documents itself for
+# humans; this reads the same headers as a tool catalogue for agents.
+
+set -uo pipefail
+OMARCHY_BIN=${OMARCHY_BIN:-/usr/share/omarchy/bin}
+include_hidden=false
+group_filter=""
+while (($#)); do
+  case "$1" in
+    --all)    include_hidden=true; shift ;;
+    --group)  group_filter=${2:?}; shift 2 ;;
+    *) echo "usage: argus-manifest [--all] [--group <name>]" >&2; exit 1 ;;
+  esac
+done
+
+for f in "$OMARCHY_BIN"/omarchy-*; do
+  [[ -f $f && -x $f ]] || continue
+  head -20 "$f" | grep -q '^# omarchy:' || continue
+
+  hidden=$(sed -n 's/^# omarchy:hidden=\(.*\)/\1/p' "$f" | head -1)
+  [[ $include_hidden == false && -n $hidden ]] && continue
+
+  name=$(basename "$f")
+  group=$(sed -n 's/^# omarchy:group=\(.*\)/\1/p' "$f" | head -1)
+  # Commands without an explicit group inherit one from their name:
+  # omarchy-theme-set -> theme. Keeps the catalogue two-level everywhere.
+  [[ -z $group ]] && group=$(cut -d- -f2 <<<"$name")
+  [[ -n $group_filter && $group != "$group_filter" ]] && continue
+
+  jq -nc \
+    --arg name "$name" \
+    --arg group "$group" \
+    --arg summary "$(sed -n 's/^# omarchy:summary=\(.*\)/\1/p' "$f" | head -1)" \
+    --arg args    "$(sed -n 's/^# omarchy:args=\(.*\)/\1/p'    "$f" | head -1)" \
+    --arg examples "$(sed -n 's/^# omarchy:examples=\(.*\)/\1/p' "$f" | head -1)" \
+    --arg aliases "$(sed -n 's/^# omarchy:alias\(es\)\?=\(.*\)/\2/p' "$f" | head -1)" \
+    '{name:$name, group:$group, summary:$summary}
+     + (if $args     != "" then {args:$args} else {} end)
+     + (if $examples != "" then {examples:($examples | split(" | "))} else {} end)
+     + (if $aliases  != "" then {aliases:($aliases | split(","))} else {} end)'
+done

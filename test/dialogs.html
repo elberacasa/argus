@@ -1,0 +1,57 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Argus dialogs</title>
+<style>
+  body { font: 16px system-ui, sans-serif; padding: 32px; }
+  button, label.upload { font: inherit; padding: 10px 16px; margin: 4px; border: 1px solid #888;
+                          background: #f4f4f4; border-radius: 6px; cursor: pointer; display: inline-block; }
+  /* The common real-world shape: the file input is hidden and a styled label
+     stands in for it, so "click the visible control" never reaches the input. */
+  #avatar { display: none; }
+</style>
+
+<h1>Account</h1>
+
+<p>
+  <label class="upload" for="avatar">Upload avatar</label>
+  <input id="avatar" type="file" accept="image/*">
+  <label>Attachments <input id="attachments" name="attachments" type="file" multiple></label>
+</p>
+
+<p>
+  <button id="delete">Delete account</button>
+  <button id="rename">Rename workspace</button>
+  <button id="notify">Show notice</button>
+  <button id="print">Print invoice</button>
+</p>
+
+<p><a id="export" download="export.csv" href="data:text/csv;charset=utf-8,id%2Cname%0A1%2Calejo%0A">Export CSV</a></p>
+
+<p id="status">Idle.</p>
+<p id="files"></p>
+
+<script>
+  const status = (t) => { document.getElementById('status').textContent = t; };
+
+  // Each handler depends on the dialog's answer, so a silently dismissed
+  // dialog produces "nothing happened" -- the exact confusion argus must name.
+  document.getElementById('delete').addEventListener('click', () => {
+    status(confirm('Delete your account? This cannot be undone.') ? 'Account deleted.' : 'Deletion cancelled.');
+  });
+  document.getElementById('rename').addEventListener('click', () => {
+    const name = prompt('New workspace name', 'Untitled');
+    status(name === null ? 'Rename cancelled.' : 'Renamed to ' + name + '.');
+  });
+  document.getElementById('notify').addEventListener('click', () => {
+    alert('Your trial ends in 3 days.');
+    status('Notice acknowledged.');
+  });
+  document.getElementById('print').addEventListener('click', () => { window.print(); status('Print requested.'); });
+
+  for (const id of ['avatar', 'attachments']) {
+    document.getElementById(id).addEventListener('change', (e) => {
+      document.getElementById('files').textContent =
+        id + ': ' + [...e.target.files].map((f) => f.name + ' (' + f.size + ' bytes)').join(', ');
+    });
+  }
+</script>

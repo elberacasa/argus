@@ -1,0 +1,1 @@
+{"about": "Live notification", "message": {"jsonrpc":"2.0","method":"event.console","params":{"lane":"l3","level":"error","text":"Uncaught ReferenceError: x is not defined"}}}

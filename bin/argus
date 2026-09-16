@@ -1,0 +1,590 @@
+#!/bin/bash
+
+# argus -- drive a browser and get told what changed.
+#
+# Every other tool answers "what is the page?", so an agent re-reads everything
+# after every action and diffs it in its own head at ~1k tokens a turn. argus
+# answers "what did my action do?" in about a hundred, and it is strictly more
+# informative because it is causal: text that appeared, fields that filled,
+# requests that failed, errors that fired, layout that moved.
+
+set -uo pipefail
+ARGUS_ROOT=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)
+source "$ARGUS_ROOT/lib/wire.sh"
+source "$ARGUS_ROOT/lib/trace.sh"
+
+usage() {
+  sed -n '3,9p' "$0" | sed 's/^# \?//'
+  cat <<'USAGE'
+
+usage: argus [--json] [--lane N] [--desk|--own] [--see] [--no-trace] <command>
+
+  --own runs the lane as a tab in your own Chromium, with your logins, through
+  the Argus extension (argus own install). It only acts on tabs it opens.
+
+  --see adds a visual delta to an action: only the regions of the screen that
+  changed, before beside after, and what that image costs an agent to read.
+
+  --desk runs the lane as a real, headful browser on the virtual desk
+  (argus desk up first). Its deltas also report what the compositor saw.
+
+  open <url>                navigate and report what loaded
+  click <role:name> [i]     click by accessible name; diagnoses why not
+  type <role:name> <text>   focus and type
+  key <Enter|Tab|...>       dispatch a key
+  upload [target] <file>... set files on a file input; no picker opens
+  dialog accept [text]      answer the next confirm/prompt with yes (one-shot)
+  dialog dismiss            answer it with no (the default)
+  audit                     what is wrong with this page
+  viewport <WxH>|reset      emulate a screen size (phone widths turn on mobile)
+  shot [file] [--full]      screenshot, with what it costs an agent to look at
+  look [role:name]          crop to one element (covered ones too), or the viewport
+  marks                     number every interactive element on a screenshot
+  delta                     what changed since the last action
+  text                      page text
+  trace [-n N]              replay what this lane did
+  lanes                     lanes with recorded activity
+  watch                     live dashboard of every lane
+  desk up|down|status       a real desktop for agents, on a virtual monitor
+  peek [on|off]             pull the desk onto your screen, or send it back
+  own install|status|uninstall  let argus drive tabs in your own Chromium (--own)
+  bar install|status|uninstall  watch agents on the desk from the Omarchy bar, view only
+  nest up|run|click|type|key|tree|shot|down  a nested desktop with its own mouse, for native apps
+  pool                      what the browser pool is holding
+  close                     drop this lane (its tab)
+  shutdown                  tear down every lane and browser
+USAGE
+}
+
+JSON=false
+while [[ ${1:-} == --* ]]; do
+  case $1 in
+    --json)     JSON=true; shift ;;
+    --lane)     ARGUS_LANE=${2:?--lane needs a number}; shift 2 ;;
+    --headful)  ARGUS_HEADFUL=1; shift ;;
+    --desk)     ARGUS_DESK=1; shift ;;
+    --see)      ARGUS_SEE=1; shift ;;
+    --own)      ARGUS_OWN=1; shift ;;
+    --images)   ARGUS_IMAGES=1; shift ;;
+    --no-trace) ARGUS_TRACE=0; shift ;;
+    --help|-h)  usage; exit 0 ;;
+    *) echo "argus: unknown flag $1" >&2; exit 1 ;;
+  esac
+done
+cmd=${1:-}; shift 2>/dev/null
+
+# Colours are passed into jq rather than embedded in its format strings, so the
+# rendering reads as structure and degrades to plain text when piped.
+if [[ -t 1 && $JSON == false ]]; then
+  ESC=$(printf '\033')
+  B=$ESC[1m; D=$ESC[2m; R=$ESC[0m; G=$ESC[32m; RD=$ESC[31m; Y=$ESC[33m; C=$ESC[36m; M=$ESC[35m
+else
+  B=; D=; R=; G=; RD=; Y=; C=; M=
+fi
+jqc() { jq -r --arg b "$B" --arg d "$D" --arg r "$R" --arg g "$G" --arg e "$RD" --arg y "$Y" --arg c "$C" --arg m "$M" "$@"; }
+
+# ---- rendering -------------------------------------------------------------
+# A delta only earns its token count if it reads at a glance: one sigil and one
+# line per channel, and anything empty is simply absent.
+render_delta() {
+  local d=$1
+  jq -e . >/dev/null 2>&1 <<<"$d" || { echo "${RD}argus: malformed delta${R}" >&2; return 1; }
+  local strip='sub("^https?://[^/]+";"")'
+
+  jqc "if .url then \"  \(\$c)-> url\(\$r)   \" + (.url.from|$strip) + \"  ->  \" + (.url.to|$strip) else empty end" <<<"$d"
+  jqc 'if .title then "  \($d)title\($r)  " + .title.to else empty end' <<<"$d"
+  jqc 'if .focus then "  \($c)> focus\($r)  " + (if .focus.from then "\($d)\(.focus.from) ->\($r) " else "" end) + "\(.focus.to // "(nothing)")" + (if .focus.offscreen then "  \($y)(focused element is off screen)\($r)" else "" end) else empty end' <<<"$d"
+  jqc '.fields // [] | .[] | "  \($c)= field\($r)  \(.at)  " + (if .from=="" then "" else "\($d)“\(.from)” ->\($r) " end) + "\($g)“\(.to)”\($r)"' <<<"$d"
+
+  jqc 'if .added then "  \($g)+\($r) " + (.added|map("“"+(.[0:56])+"”")|join("  "))
+        + (if .addedMore then "  \($d)+\(.addedMore) more\($r)" else "" end) else empty end' <<<"$d"
+  jqc 'if .removed then "  \($e)-\($r) " + (.removed|map("\($d)“"+(.[0:56])+"”\($r)")|join("  "))
+        + (if .removedMore then "  \($d)+\(.removedMore) more\($r)" else "" end) else empty end' <<<"$d"
+
+  jqc '.dialogs // [] | .[] |
+      "  \($y)? \(.type)\($r)  "
+      + (if .type=="file-chooser" then "\(.at)  \($d)\(.message)\($r)"
+         elif .type=="download" then "\(.message)"
+         else "\u201c\(.message[0:70])\u201d  -> \(if .answer=="accepted" then "\($g)" else "\($e)" end)\(.answer)\($r)"
+              + (if .answer=="dismissed" and (.type=="confirm" or .type=="prompt") then "  \($d)(argus dialog accept, then retry)\($r)" else "" end)
+         end)' <<<"$d"
+  jqc '.downloads // [] | .[] | "  \($g)v file\($r)   \(.name)  \($d)\(.bytes)B  \(.path)\($r)" + (if .partial then "  \($y)(still downloading)\($r)" else "" end)' <<<"$d"
+  jqc '.console // [] | .[] | "  " + (if .level=="error" then "\($e)x err\($r) " else "\($y)! warn\($r) " end) + (.text[0:100])' <<<"$d"
+  jqc '.network // [] | .[] | "  \($m)~\($r) " + .method + " " + (.url[0:48]) + "  "
+       + (if .status==0 or .error then "\($e)" + (.error // "failed") + "\($r)"
+          elif .status>=400 then "\($e)\(.status)\($r)" else "\(.status)" end)
+       + "  \($d)\(.ms)ms\($r)"' <<<"$d"
+
+  jqc '.desktop // {} |
+      ((.opened // [])[]     | "  \($c)[] window\($r) opened  \($g)\u201c\(.title)\u201d\($r)  \($d)\(.size[0])x\(.size[1])\(if .floating then " floating" else "" end)\($r)"),
+      ((.closed // [])[]     | "  \($c)[] window\($r) closed  \($d)\u201c\(.title)\u201d\($r)"),
+      ((.fullscreen // [])[] | "  \($c)[] window\($r) \(if .to > 0 then "went fullscreen" else "left fullscreen" end)  \($d)\u201c\(.title)\u201d\($r)"),
+      ((.resized // [])[]    | "  \($c)[] window\($r) resized  \($d)\(.from[0])x\(.from[1]) -> \(.to[0])x\(.to[1])\($r)")' <<<"$d"
+  jqc 'if .focusRestored then "  \($e)! focus\($r) the desk took your focus; it was returned  \($d)(window rules missing?)\($r)" else empty end' <<<"$d"
+  jqc 'if .visual then "  \($m)o see\($r)   " + (
+        if .visual.changed == false then "no visual change"
+        elif .visual.whole then "most of the viewport changed  \($d)\(.visual.imageSize) ~\(.visual.tokens) tokens\($r)"
+        else "\(.visual.regions|length) region(s) changed, \(.visual.changedPct)%  \($d)\(.visual.imageSize) ~\(.visual.tokens) tokens\($r)" end)
+      + (if .visual.image then "\n  \($d)       \(.visual.image)\($r)" else "" end) else empty end' <<<"$d"
+  jqc 'if .layoutShift then "  \($y)^ shift\($r) \(.layoutShift)  \($d)(cumulative layout shift caused by this action)\($r)" else empty end' <<<"$d"
+  jqc 'if .longTasks then "  \($y)# block\($r) \(.longTasks) long task(s) >50ms  \($d)(main thread stalled)\($r)" else empty end' <<<"$d"
+
+  local seen
+  seen=$(jq -r '[.added,.removed,.console,.network,.url,.title,.layoutShift,.fields,.desktop,.dialogs,.downloads,.focus,(if .visual.changed then .visual else null end)]|map(select(.!=null))|length' <<<"$d")
+  [[ $seen == 0 ]] && printf '  %sno observable change%s  %s(%s mutations, nothing visible)%s\n' \
+    "$Y" "$R" "$D" "$(jq -r '.mutations // 0' <<<"$d")" "$R"
+  return 0
+}
+
+# The locator returns a diagnosis rather than a bare failure, so print it in
+# full: "covered by div#scrim, z-index 9998" is the whole debugging session.
+render_diagnosis() {
+  jqc '"  \($e)x \(.reason)\($r)" + (if .at then "  \($d)\(.at)\($r)" else "" end)
+     + (if .coveredBy then "\n  \($d)covered by\($r) \(.coveredBy)  \($d)z-index:\(.blockerZIndex) position:\(.blockerPosition)\($r)" else "" end)
+     + (if .candidates then "\n" + (.candidates|map("  \($d)[\(.index)]\($r) \(.name // ((.names // [])|join(" / ")))  \($d)\(.at)\($r)")|join("\n")) else "" end)
+     + (if .didYouMean then "\n  \($d)did you mean:\($r) " + (.didYouMean|join("  ")) else "" end)
+     + (if .available then "  \($d)only \(.available) match(es) exist\($r)" else "" end)
+     + (if .message then "\n  \($d)\(.message)\($r)" else "" end)
+     + (if .css then "\n  \($d)\(.css)\($r)" else "" end)
+     + (if .hint then "\n  \($d)\(.hint)\($r)" else "" end)' <<<"$1"
+}
+
+render_record() {
+  local rec=$1 action target ms pad
+  action=$(jq -r '.action' <<<"$rec")
+  target=$(jq -r '.target // ""' <<<"$rec")
+  ms=$(jq -r '.ms // ""' <<<"$rec")
+  pad=$(( 46 - ${#target} )); (( pad < 1 )) && pad=1
+
+  if [[ $(jq -r '.ok' <<<"$rec") == false ]]; then
+    printf '%s> %-5s%s %s%s%s\n' "$B" "$action" "$R" "$C" "$target" "$R"
+    render_diagnosis "$(jq -c '.diagnosis' <<<"$rec")"
+    return 0
+  fi
+  printf '%s> %-5s%s %s%s%s%*s%s%sms%s\n' "$B" "$action" "$R" "$C" "$target" "$R" "$pad" "" "$D" "$ms" "$R"
+  render_delta "$(jq -c '.delta' <<<"$rec")"
+  jqc '"  \($d)settled \(.settled.ms)ms . \(.settled.reason)\($r)"' <<<"$rec"
+  return 0
+}
+
+# Single exit point for every action: the trace, the agent's JSON and the
+# terminal all render the same record, so they cannot drift apart.
+emit() {
+  local rec=$1
+  trace_append "$rec"
+  if [[ $JSON == true ]]; then printf '%s\n' "$rec"; else render_record "$rec"; fi
+  [[ $(jq -r '.ok' <<<"$rec") == false ]] && return 3
+  return 0
+}
+
+# ---- action plumbing -------------------------------------------------------
+# A real click at hit-tested coordinates. Frameworks that only trust genuine
+# pointer events behave exactly as they would for a person.
+dispatch_click() {
+  local x=$1 y=$2 phase
+  for phase in mousePressed mouseReleased; do
+    cdp Input.dispatchMouseEvent \
+      "$(jq -nc --arg t "$phase" --argjson x "$x" --argjson y "$y" '{type:$t,x:$x,y:$y,button:"left",clickCount:1}')" >/dev/null
+  done
+}
+
+# A navigation replaces the document, taking the probe's memory of the previous
+# URL with it. The CLI outlives the page, so it carries that across.
+# On a desk lane, snapshot the compositor's view of our windows before acting,
+# so the delta can say what a person watching would have seen change.
+# Downloads land in the slot's directory; list it before acting so the record can
+# name exactly what this action wrote. Commands on a slot hold its lock, so a new
+# file there belongs to this lane.
+# Name, mtime and size, not names alone: Chrome overwrites a download that has
+# the same name as an existing file, so a re-download leaves the name list
+# unchanged and a name-only diff reports nothing.
+downloads_snapshot() { find "$(downloads_dir)" -maxdepth 1 -type f -printf '%f\t%T@\t%s\n' 2>/dev/null | sort; }
+downloads_before() { DL_BEFORE=$(downloads_snapshot); return 0; }
+
+desk_before() {
+  downloads_before
+  SEE_BEFORE=""
+  if [[ ${ARGUS_SEE:-0} == 1 ]]; then
+    mkdir -p "$ARGUS_EYES_DIR"
+    SEE_BEFORE="$ARGUS_EYES_DIR/$(lane_id)-before.png"
+    eyes_grab "$SEE_BEFORE" || SEE_BEFORE=""
+  fi
+  DESK_BEFORE=""; USER_WS_BEFORE=""
+  [[ ${ARGUS_DESK:-0} == 1 ]] || return 0
+  DESK_BEFORE=$(desk_windows)
+  USER_WS_BEFORE=$(hyprctl activeworkspace -j | jq -r .id)
+}
+
+build_record() {
+  local action=$1 target=$2 t0=$3 mark=${4:-default} was=${5:-}
+  local settled delta ms now
+  settled=$(js_raw 'return window.__argus.settled({quiet:250,timeout:8000})')
+  delta=$(js_raw "return window.__argus.delta('$mark')")
+
+  # WebDriver reports failure as ordinary JSON ({"error": ...}). Read as data it
+  # renders as "no observable change" -- a calm non-result standing in for "the
+  # instrumentation broke". Refuse to produce a delta from an error.
+  local broken
+  broken=$(jq -rn --argjson s "${settled:-null}" --argjson d "${delta:-null}" '
+    [$s, $d] | map(select(type != "object" or has("error"))) | .[0]
+    | if . == null then empty else (if type == "object" then (.message // .error) else "no response" end) end' 2>/dev/null)
+  if [[ -n $broken ]]; then
+    jq -nc --arg a "$action" --arg g "$target" --arg m "${broken%%$'\n'*}" \
+      '{action:$a, target:$g, ok:false, diagnosis:{reason:"probe-error", message:$m,
+        hint:"The page instrumentation did not answer. The action may still have run; re-open the lane to reinstall the probe."}}'
+    return 0
+  fi
+  local dir changed
+  dir=$(downloads_dir)
+  changed=$(comm -13 <(printf '%s\n' "${DL_BEFORE:-}") <(downloads_snapshot) | grep -v '^$')
+  # The browser writes the file a moment after the page asks for it. When the
+  # probe saw a download start, wait for the file -- bounded, and only then.
+  if [[ -z $changed ]] && jq -e 'any(.dialogs[]?; .type == "download")' <<<"$delta" >/dev/null 2>&1; then
+    local _
+    for _ in $(seq 1 20); do
+      sleep 0.1
+      changed=$(comm -13 <(printf '%s\n' "${DL_BEFORE:-}") <(downloads_snapshot) | grep -v '^$')
+      [[ -n $changed && $changed != *.crdownload* ]] && break
+    done
+  fi
+  if [[ -n $changed ]]; then
+    local files="[]" name _mtime bytes
+    while IFS=$'\t' read -r name _mtime bytes; do
+      files=$(jq -c --arg n "${name%.crdownload}" --arg p "$dir/$name" --argjson b "${bytes:-0}" \
+        --argjson part "$([[ $name == *.crdownload ]] && echo true || echo false)" \
+        '. + [{name:$n, path:$p, bytes:$b, partial:$part}]' <<<"$files")
+    done <<<"$changed"
+    delta=$(jq -c --argjson f "$files" '.downloads = $f' <<<"$delta")
+  fi
+  if [[ -n ${SEE_BEFORE:-} ]]; then
+    local see_after sheet visual tokens size
+    see_after="$ARGUS_EYES_DIR/$(lane_id)-after.png"
+    sheet="$ARGUS_EYES_DIR/$(lane_id)-$(date +%H%M%S%3N).png"
+    if eyes_grab "$see_after"; then
+      visual=$(eyes_diff "$SEE_BEFORE" "$see_after" "$sheet")
+      if size=$(jq -r '.imageSize // empty' <<<"$visual") && [[ -n $size ]]; then
+        tokens=$(eyes_tokens "${size%x*}" "${size#*x}")
+        visual=$(jq -c --argjson t "$tokens" '.tokens = $t' <<<"$visual")
+      elif [[ $(jq -r '.whole // false' <<<"$visual") == true ]]; then
+        # Most of the frame changed: the useful picture is the new frame itself.
+        cp "$see_after" "$sheet"
+        size=$(magick identify -format '%wx%h' "$sheet")
+        tokens=$(eyes_tokens "${size%x*}" "${size#*x}")
+        visual=$(jq -c --arg i "$sheet" --arg s "$size" --argjson t "$tokens" '. + {image:$i, imageSize:$s, tokens:$t}' <<<"$visual")
+      fi
+      delta=$(jq -c --argjson v "$visual" '.visual = $v' <<<"$delta")
+    fi
+  fi
+  if [[ ${ARGUS_DESK:-0} == 1 && -n ${DESK_BEFORE:-} ]]; then
+    # A window maps a frame or two after the page settles; give the compositor
+    # a short, bounded chance to catch up before concluding nothing happened.
+    local after desktop _
+    for _ in 1 2 3 4 5 6; do
+      after=$(desk_windows)
+      [[ $after != "$DESK_BEFORE" ]] && break
+      sleep 0.08
+    done
+    desktop=$(desk_diff "$DESK_BEFORE" "$after")
+    [[ $desktop != "{}" ]] && delta=$(jq -c --argjson x "$desktop" '.desktop = $x' <<<"$delta")
+    # Never silent: if the rules failed and focus was taken, it is put back and
+    # the record says so, rather than the user discovering it by typing.
+    desk_focus_guard "$USER_WS_BEFORE" && delta=$(jq -c '.focusRestored = true' <<<"$delta")
+  fi
+  ms=$(( ($(date +%s%N) - t0) / 1000000 ))
+  now=$(current_url)
+  [[ -n $was && $was != "$now" ]] &&
+    delta=$(jq -c --arg f "$was" --arg t "$now" '.url = {from:$f,to:$t}' <<<"$delta")
+  jq -nc --arg a "$action" --arg g "$target" --arg u "$now" \
+         --argjson s "$settled" --argjson d "$delta" --argjson ms "$ms" \
+    '{action:$a,target:$g,ok:true,ms:$ms,url:$u,settled:$s,delta:$d}'
+}
+
+# Resolve a role:name spec, or emit the diagnosis and stop. Sets LOC_X / LOC_Y.
+locate_or_fail() {
+  local action=$1 spec=$2 idx=${3:-} loc
+  loc=$(js locate.js "$spec" ${idx:+"$idx"})
+  if [[ $(jq -r '.ok // false' <<<"$loc") != true ]]; then
+    emit "$(jq -nc --arg a "$action" --arg t "$spec" --argjson l "$loc" \
+      '{action:$a,target:$t,ok:false,diagnosis:$l}')"
+    return 3
+  fi
+  LOC_X=$(jq -r .x <<<"$loc"); LOC_Y=$(jq -r .y <<<"$loc")
+  return 0
+}
+
+# ---- commands --------------------------------------------------------------
+case "$cmd" in
+open)
+  url=${1:?usage: argus open <url>}
+  [[ $url =~ ^[a-zA-Z][a-zA-Z0-9+.-]*: ]] || url="https://$url"   # leave file:, data:, about: alone
+  session_open || exit 1
+  desk_before
+  t0=$(date +%s%N)
+  nav "$url" || exit 1
+  probe_ready
+  emit "$(build_record open "$url" "$t0" nav)"
+  ;;
+
+click)
+  spec=${1:?usage: argus click <role:name> [index]}
+  session_open || exit 1; probe_ready
+  locate_or_fail click "$spec" "${2:-}" || exit 3
+  js_raw 'return window.__argus.mark()' >/dev/null
+  was=$(current_url)
+  desk_before
+  t0=$(date +%s%N)
+  dispatch_click "$LOC_X" "$LOC_Y"
+  emit "$(build_record click "$spec" "$t0" default "$was")"
+  ;;
+
+type)
+  spec=${1:?usage: argus type <role:name> <text>}; text=${2:?usage: argus type <role:name> <text>}
+  session_open || exit 1; probe_ready
+  locate_or_fail type "$spec" || exit 3
+  dispatch_click "$LOC_X" "$LOC_Y"
+  js_raw 'return window.__argus.mark()' >/dev/null
+  was=$(current_url)
+  desk_before
+  t0=$(date +%s%N)
+  cdp Input.insertText "$(jq -nc --arg t "$text" '{text:$t}')" >/dev/null
+  emit "$(build_record type "$spec" "$t0" default "$was")"
+  ;;
+
+key)
+  k=${1:?usage: argus key <Enter|Tab|Escape|...>}
+  session_open || exit 1; probe_ready
+  declare -A CODE=([Enter]=13 [Tab]=9 [Escape]=27 [Backspace]=8 [ArrowDown]=40 [ArrowUp]=38 [ArrowLeft]=37 [ArrowRight]=39)
+  vk=${CODE[$k]:-0}
+  js_raw 'return window.__argus.mark()' >/dev/null
+  was=$(current_url)
+  desk_before
+  t0=$(date +%s%N)
+  for phase in keyDown keyUp; do
+    cdp Input.dispatchKeyEvent "$(jq -nc --arg t "$phase" --arg k "$k" --argjson c "$vk" \
+      '{type:$t,key:$k,code:$k,windowsVirtualKeyCode:$c,nativeVirtualKeyCode:$c}')" >/dev/null
+  done
+  emit "$(build_record key "$k" "$t0" default "$was")"
+  ;;
+
+audit)
+  session_open || exit 1
+  a=$(js audit.js)
+  url=$(current_url)
+  trace_append "$(jq -nc --arg u "$url" --argjson a "$a" '{action:"audit",target:$u,ok:true,audit:$a}')"
+  if [[ $JSON == true ]]; then printf '%s\n' "$a"; exit 0; fi
+  jqc '"\($b)> audit\($r)  \($d)\(.viewport) . \(.scanned) elements scanned\($r)\n"
+     + "  score \($b)\(.score)/100\($r)  \($d)\(.errors) error(s), \(.warnings) warning(s)\($r)"' <<<"$a"
+  jqc '.findings[] |
+      "  " + (if .severity=="error" then "\($e)x\($r)" else "\($y)!\($r)" end)
+    + " \($b)\(.rule)\($r) \($d)x\(.count)\($r)  \(.hint)\n"
+    + (.examples|map("      \($d)\(.at)\($r)"
+      + (if .contrast   then "  \($e)\(.contrast):1\($r) need \(.required):1  \($d)\(.text[0:34])\($r)"
+       elif .overflowPx then "  \($e)+\(.overflowPx)px\($r) past the viewport"
+       elif .fontSize   then "  \($y)\(.fontSize)px\($r)  \($d)\(.text)\($r)"
+       elif .jumped     then "  \($y)\(.jumped)\($r)  \($d)\(.text)\($r)"
+       elif .size       then "  \($y)\(.size)\($r)  \($d)\(.text // "")\($r)"
+       elif .id         then "  id=\($y)\(.id)\($r)"
+       elif .src        then "  \($d)\(.src)\($r)" else "" end))|join("\n"))' <<<"$a"
+  ;;
+
+text)
+  session_open || exit 1
+  js_raw 'return (document.querySelector("main,article,[role=main],#content")||document.body).innerText' | jq -r .
+  ;;
+
+delta) session_open || exit 1; probe_ready; render_delta "$(js_raw 'return window.__argus.delta()')" ;;
+stats) session_open || exit 1; probe_ready; js_raw 'return window.__argus.stats()' | jq . ;;
+
+trace)
+  n=20; [[ ${1:-} == -n ]] && n=${2:?-n needs a count}
+  f=$(trace_file)
+  [[ -f $f ]] || { echo "argus: no trace for lane $ARGUS_LANE"; exit 1; }
+  if [[ $JSON == true ]]; then tail -n "$n" "$f"; exit 0; fi
+  tail -n "$n" "$f" | jqc '
+    (.t/1000|strflocaltime("%H:%M:%S")) as $ts |
+    if .action=="audit" then
+      "\($d)\($ts)\($r) \($b)audit\($r)  score \(.audit.score)/100  \($d)\(.audit.errors) error(s), \(.audit.warnings) warning(s)\($r)"
+    elif .ok==false then
+      "\($d)\($ts)\($r) \($b)\(.action)\($r) \($c)\(.target)\($r)  \($e)x \(.diagnosis.reason)\($r)"
+        + (if .diagnosis.coveredBy then " \($d)by \(.diagnosis.coveredBy)\($r)" else "" end)
+    else
+      "\($d)\($ts)\($r) \($b)\(.action)\($r) \($c)\((.target//"")[0:44])\($r)  \($d)\(.ms)ms\($r)"
+        + (if ((.delta.console//[])|length)>0 then "  \($e)\((.delta.console|length)) err\($r)" else "" end)
+        + (if ((.delta.network//[])|length)>0 then "  \($m)\((.delta.network|length)) net\($r)" else "" end)
+        + (if .delta.url then "  \($c)-> \(.delta.url.to|sub("^https?://";"")|.[0:40])\($r)" else "" end)
+    end'
+  ;;
+
+lanes)
+  found=0
+  for l in $(trace_lanes); do
+    f=$ARGUS_TRACE_DIR/lane-$l.jsonl
+    last=$(tail -1 "$f" 2>/dev/null); [[ -z $last ]] && continue
+    found=1
+    jqc --arg l "$l" --argjson n "$(wc -l < "$f")" \
+      '"lane \($b)\($l)\($r)  \($d)\($n) steps\($r)  \(.action) \($c)\((.target//"")[0:50])\($r)"' <<<"$last"
+  done
+  (( found )) || echo "argus: no lanes have recorded activity"
+  ;;
+
+watch) exec "$ARGUS_ROOT/bin/argus-watch" "$@" ;;
+pool)  pool_status ;;
+viewport)
+  session_open || exit 1
+  case ${1:-} in
+    reset)
+      cdp Emulation.clearDeviceMetricsOverride >/dev/null
+      echo "viewport restored to the window size" ;;
+    [0-9]*x[0-9]*)
+      w=${1%x*}; h=${1#*x}
+      # Below 768px emulate a mobile device too, so meta viewport, touch and
+      # hover media queries behave as they would on a phone, not a narrow window.
+      mobile=false; (( w < 768 )) && mobile=true
+      cdp Emulation.setDeviceMetricsOverride \
+        "$(jq -nc --argjson w "$w" --argjson h "$h" --argjson m "$mobile" '{width:$w,height:$h,deviceScaleFactor:1,mobile:$m}')" >/dev/null
+      cdp Emulation.setTouchEmulationEnabled "$(jq -nc --argjson m "$mobile" '{enabled:$m}')" >/dev/null
+      # Switching a loaded page from desktop to phone width leaves it zoomed out
+      # to fit the old layout, which no real phone does on load. Reset the zoom
+      # so an audit after this matches a page loaded at this size.
+      cdp Emulation.setPageScaleFactor '{"pageScaleFactor":1}' >/dev/null
+      echo "viewport ${w}x${h}$([[ $mobile == true ]] && echo ' (mobile)')" ;;
+    *) echo "usage: argus viewport <width>x<height> | reset" >&2; exit 1 ;;
+  esac ;;
+
+shot)
+  session_open || exit 1
+  file=""; full=false
+  for a in "$@"; do [[ $a == --full ]] && full=true || file=$a; done
+  [[ -z $file ]] && file="$ARGUS_STATE/shot-$(lane_id)-$(date +%H%M%S).png"
+  params='{"format":"png"}'
+  if [[ $full == true ]]; then
+    size=$(cdp Page.getLayoutMetrics | jq -c '.value.cssContentSize')
+    params=$(jq -nc --argjson s "$size" '{format:"png",captureBeyondViewport:true,clip:{x:0,y:0,width:$s.width,height:$s.height,scale:1}}')
+  fi
+  cdp Page.captureScreenshot "$params" | jq -r '.value.data // empty' | base64 -d > "$file" 2>/dev/null
+  [[ -s $file ]] || { echo "argus: screenshot failed" >&2; rm -f "$file"; exit 1; }
+  read -r w h < <(python3 -c 'import struct,sys; d=open(sys.argv[1],"rb").read(24); print(*struct.unpack(">II", d[16:24]))' "$file")
+  # ceil(w/28) * ceil(h/28) visual tokens, downscaled past 2576px long edge or
+  # 4784 tokens on current models (platform.claude.com/docs/en/build-with-claude/vision).
+  tokens=$(python3 -c 'import math,sys
+w,h=int(sys.argv[1]),int(sys.argv[2])
+s=min(1.0, 2576/max(w,h))
+while True:
+    t=math.ceil(w*s/28)*math.ceil(h*s/28)
+    if t<=4784: break
+    s*=0.99
+print(t, "(downscaled)") if s < 1 else print(t)' "$w" "$h")
+  printf '%s  %sx%s  ~%s visual tokens for an agent to look at\n' "$file" "$w" "$h" "$tokens" ;;
+
+look)
+  session_open || exit 1; probe_ready
+  mkdir -p "$ARGUS_EYES_DIR"
+  file="$ARGUS_EYES_DIR/$(lane_id)-look-$(date +%H%M%S%3N).png"
+  if [[ -n ${1:-} ]]; then
+    loc=$(js locate.js "$1")
+    box=$(jq -c '.box // empty' <<<"$loc")
+    [[ -z $box ]] && { emit "$(jq -nc --arg t "$1" --argjson l "$loc" '{action:"look",target:$t,ok:false,diagnosis:$l}')"; exit 3; }
+    pad=24
+    eyes_clip "$file" "$(jq -r ".x - $pad" <<<"$box")" "$(jq -r ".y - $pad" <<<"$box")" \
+      "$(jq -r ".w + 2*$pad" <<<"$box")" "$(jq -r ".h + 2*$pad" <<<"$box")" || { echo "argus: capture failed" >&2; exit 1; }
+    state=$(jq -c '{reachable: .ok, reason: (if .ok then null else .reason end), coveredBy}' <<<"$loc")
+  else
+    eyes_grab "$file" || { echo "argus: capture failed" >&2; exit 1; }
+    state='{}'
+  fi
+  size=$(magick identify -format '%wx%h' "$file")
+  tokens=$(eyes_tokens "${size%x*}" "${size#*x}")
+  rec=$(jq -nc --arg t "${1:-viewport}" --arg i "$file" --arg s "$size" --argjson k "$tokens" --argjson st "$state" \
+    '{action:"look", target:$t, ok:true, image:$i, imageSize:$s, tokens:$k} + ($st | with_entries(select(.value != null)))')
+  trace_append "$rec"
+  if [[ $JSON == true ]]; then printf '%s\n' "$rec"; else
+    jqc '"\($b)> look\($r)  \($c)\(.target)\($r)  \($d)\(.imageSize) ~\(.tokens) visual tokens\($r)"
+      + (if .reachable == false then "\n  \($e)x \(.reason)\($r)" + (if .coveredBy then " \($d)by \(.coveredBy)\($r)" else "" end) else "" end)
+      + "\n  \($d)\(.image)\($r)"' <<<"$rec"
+  fi ;;
+
+marks)
+  session_open || exit 1
+  mkdir -p "$ARGUS_EYES_DIR"
+  file="$ARGUS_EYES_DIR/$(lane_id)-marks-$(date +%H%M%S%3N).png"
+  legend=$(js_exec "$EYES_MARKS_JS" '["draw"]')
+  eyes_grab "$file"; ok=$?
+  js_exec "$EYES_MARKS_JS" '["clear"]' >/dev/null
+  (( ok == 0 )) || { echo "argus: capture failed" >&2; exit 1; }
+  size=$(magick identify -format '%wx%h' "$file")
+  tokens=$(eyes_tokens "${size%x*}" "${size#*x}")
+  rec=$(jq -nc --arg i "$file" --arg s "$size" --argjson k "$tokens" --argjson l "$legend" \
+    '{action:"marks", ok:true, image:$i, imageSize:$s, tokens:$k, marks:$l}')
+  trace_append "$(jq -c 'del(.marks) + {count: (.marks|length)}' <<<"$rec")"
+  if [[ $JSON == true ]]; then printf '%s\n' "$rec"; else
+    jqc '"\($b)> marks\($r)  \(.marks|length) interactive elements  \($d)\(.imageSize) ~\(.tokens) visual tokens\($r)\n"
+      + (.marks | map("  \($d)\(.n|tostring|(" " * (3 - length)) + .)\($r) \(if .reachable then "" else "\($e)(covered) \($r)" end)\(.target)") | join("\n"))
+      + "\n  \($d)\(.image)\($r)"' <<<"$rec"
+  fi ;;
+
+upload)
+  session_open || exit 1; probe_ready
+  # A lone argument that exists on disk is a file, not a target name.
+  target=""
+  if (( $# >= 2 )) || { (( $# == 1 )) && [[ ! -e $1 ]]; }; then target=$1; shift; fi
+  (( $# )) || { echo "usage: argus upload [target] <file>..." >&2; exit 1; }
+  paths=()
+  for f in "$@"; do
+    [[ -f $f ]] || { echo "argus: no such file: $f" >&2; exit 1; }
+    paths+=("$(realpath "$f")")
+  done
+  token="argus-$(date +%s%N)"
+  loc=$(js upload.js "$target" "$token")
+  if [[ $(jq -r '.ok // false' <<<"$loc") != true ]]; then
+    emit "$(jq -nc --arg t "${target:-(file input)}" --argjson l "$loc" '{action:"upload",target:$t,ok:false,diagnosis:$l}')"
+    exit 3
+  fi
+  if (( ${#paths[@]} > 1 )) && [[ $(jq -r .multiple <<<"$loc") != true ]]; then
+    echo "argus: $(jq -r .at <<<"$loc") accepts one file, got ${#paths[@]}" >&2; exit 1
+  fi
+  js_raw 'return window.__argus.mark()' >/dev/null
+  was=$(current_url)
+  desk_before
+  t0=$(date +%s%N)
+  # Files go on the input itself (hidden inputs included), exactly what a picker
+  # would have done, and the page gets the change event it listens for.
+  set_files "$token" "${paths[@]}" || exit 1
+  # Success is what the input holds, not what the transport said.
+  landed=$(js_raw "return document.querySelector('[data-argus-upload=\"$token\"]')?.files?.length ?? -1")
+  if [[ $landed != "${#paths[@]}" ]]; then
+    echo "argus: upload reported success but the input holds $landed of ${#paths[@]} file(s)" >&2; exit 1
+  fi
+  emit "$(build_record upload "$(jq -r .at <<<"$loc") <- ${#paths[@]} file(s)" "$t0" default "$was")"
+  ;;
+
+dialog)
+  session_open || exit 1; probe_ready
+  case ${1:-} in
+    accept)  js_raw "return window.__argus.answerNext(true, $(jq -nc --arg t "${2:-}" 'if $t == "" then null else $t end'))" >/dev/null
+             echo "the next confirm/prompt on lane $(lane_id) will be accepted${2:+ with \"$2\"}" ;;
+    dismiss) js_raw 'return window.__argus.answerNext(false)' >/dev/null
+             echo "the next confirm/prompt on lane $(lane_id) will be dismissed" ;;
+    *) echo "usage: argus dialog accept [text] | dismiss" >&2; exit 1 ;;
+  esac ;;
+
+desk)
+  case ${1:-status} in
+    up)     driver_up && desk_up ;;
+    down)   desk_down ;;
+    status) desk_status ;;
+    *) echo "usage: argus desk up|down|status" >&2; exit 1 ;;
+  esac ;;
+peek) desk_peek "${1:-toggle}" ;;
+own)  exec "$ARGUS_ROOT/bin/argus-own" "$@" ;;
+bar)  exec "$ARGUS_ROOT/bin/argus-bar" "$@" ;;
+nest) exec "$ARGUS_ROOT/bin/argus-nest" "$@" ;;
+close) session_drop; echo "lane $ARGUS_LANE closed" ;;
+shutdown)
+  desk_active && desk_down
+  pool_shutdown
+  driver_shutdown
+  own_shutdown            # argus's tabs in the person's browser; never the browser
+  echo "argus: pool down" ;;
+""|help) usage ;;
+*) echo "argus: unknown command '$cmd' (try: argus help)" >&2; exit 1 ;;
+esac

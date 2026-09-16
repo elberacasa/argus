@@ -1,0 +1,17 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Argus overflow fixture</title>
+<style>
+  body { font: 16px system-ui; margin: 0; padding: 16px; }
+  .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .scroller { overflow-x: auto; }
+  .wide { min-width: 900px; }
+</style>
+<h1>Overflow</h1>
+<!-- Legitimate: wide, but inside its own scroll container. Must NOT be flagged. -->
+<div class="scroller"><table class="wide"><tr><td>A wide table that scrolls inside its box</td></tr></table></div>
+<!-- The defect found on argus's own landing page: visually-hidden does not size a
+     <table>, so this invisible table widens the page and a phone zooms out. -->
+<table class="visually-hidden"><caption>Screen-reader data</caption>
+  <tr><th>Method</th><th>Tokens</th><th>Basis for the estimate, which is long enough to push this invisible table well past a phone screen</th></tr></table>

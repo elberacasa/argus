@@ -1,0 +1,112 @@
+#!/bin/bash
+
+# omarchy:summary=Fetch a URL as agent-readable markdown through a warm headless Chromium
+# omarchy:args=[--text] [--links] [--json] [--wait <ms>] [--images] <url>...
+# omarchy:examples=omarchy browse https://omarchy.org | omarchy browse --text https://news.ycombinator.com
+
+# Agents read the web far more often than they click it, so the fast path is a
+# warm browser and a text projection -- not screenshots. Chromedriver ships
+# inside the chromium package, speaks plain HTTP, and tunnels raw CDP, so this
+# needs nothing that isn't already installed.
+
+set -uo pipefail
+
+PORT=${OMARCHY_BROWSE_PORT:-9515}
+BASE=http://127.0.0.1:$PORT
+STATE=${XDG_RUNTIME_DIR:-/tmp}/omarchy-browse
+mkdir -p "$STATE"
+
+mode=markdown wait_ms=0 images=false urls=()
+while (($#)); do
+  case "$1" in
+    --text)   mode=text;   shift ;;
+    --links)  mode=links;  shift ;;
+    --json)   mode=json;   shift ;;
+    --images) images=true; shift ;;
+    --wait)   wait_ms=${2:?--wait needs milliseconds}; shift 2 ;;
+    -h|--help) sed -n '3,5p' "$0" | sed 's/^# omarchy://'; exit 0 ;;
+    -*) echo "Unknown flag: $1" >&2; exit 1 ;;
+    *)  urls+=("$1"); shift ;;
+  esac
+done
+((${#urls[@]})) || { echo "Usage: omarchy-browse [--text|--links|--json] <url>..." >&2; exit 1; }
+
+# One chromedriver for the machine. Every agent session reuses it, so only the
+# very first call on a cold boot pays the startup cost.
+if ! curl -sf --max-time 1 "$BASE/status" >/dev/null 2>&1; then
+  setsid chromedriver --port="$PORT" --silent >/dev/null 2>&1 </dev/null &
+  disown
+  for _ in $(seq 1 60); do curl -sf --max-time 1 "$BASE/status" >/dev/null 2>&1 && break; sleep 0.1; done
+fi
+
+new_session() {
+  local args='"--headless=new","--disable-gpu","--disable-dev-shm-usage","--no-first-run","--disable-extensions"'
+  [[ $images == false ]] && args+=',"--blink-settings=imagesEnabled=false"'
+  curl -s -X POST "$BASE/session" -H 'Content-Type: application/json' -d "{
+    \"capabilities\":{\"alwaysMatch\":{\"browserName\":\"chrome\",\"goog:chromeOptions\":{
+      \"binary\":\"/usr/bin/chromium\",\"args\":[$args],
+      \"excludeSwitches\":[\"enable-automation\"]},
+      \"pageLoadStrategy\":\"normal\"}}}" | jq -r '.value.sessionId // empty'
+}
+
+# The session outlives the command: a warm browser turns a ~1.2s cold fetch into
+# a ~300ms one, which is the whole point.
+sid_file=$STATE/session
+sid=$(cat "$sid_file" 2>/dev/null || true)
+if [[ -z $sid ]] || ! curl -sf --max-time 2 "$BASE/session/$sid/url" >/dev/null 2>&1; then
+  sid=$(new_session)
+  [[ -z $sid ]] && { echo "omarchy-browse: could not start chromium" >&2; exit 1; }
+  echo "$sid" > "$sid_file"
+fi
+S=$BASE/session/$sid
+
+read -r -d '' EXTRACT <<'JS'
+const mode = arguments[0];
+const root = document.querySelector("main,article,[role=main],#content,.mw-parser-output") || document.body;
+if (mode === "text") return root.innerText.replace(/\n{3,}/g, "\n\n").trim();
+if (mode === "links") return [...document.querySelectorAll("a[href]")]
+  .map(a => [a.innerText.replace(/\s+/g," ").trim(), a.href])
+  .filter(([t,h]) => t && !h.startsWith("javascript:"))
+  .map(([t,h]) => t + "\t" + h).join("\n");
+const skip = new Set(["SCRIPT","STYLE","NAV","FOOTER","ASIDE","NOSCRIPT","FORM","SVG","BUTTON"]);
+const out = [];
+const walk = n => {
+  if (n.nodeType === 3) { const t = n.textContent.replace(/\s+/g," "); if (t.trim()) out.push(t); return; }
+  if (n.nodeType !== 1 || skip.has(n.tagName)) return;
+  const tag = n.tagName;
+  if (/^H[1-6]$/.test(tag)) { const t = n.innerText.trim(); if (t) out.push("\n\n"+"#".repeat(+tag[1])+" "+t+"\n"); return; }
+  // Empty-text links are icons and image wrappers; they cost tokens and say nothing.
+  if (tag === "A") { const t = n.innerText.replace(/\s+/g," ").trim(); if (!t) return;
+                     out.push(n.href ? "["+t+"]("+n.href+")" : t); return; }
+  if (tag === "IMG") { const a = (n.alt||"").trim(); if (a) out.push("!["+a+"]"); return; }
+  if (tag === "PRE") { out.push("\n```\n"+n.innerText.trim()+"\n```\n"); return; }
+  if (tag === "LI") out.push("\n- ");
+  else if (/^(P|DIV|SECTION|UL|OL|TABLE|TR|BR|H[1-6])$/.test(tag)) out.push("\n");
+  for (const c of n.childNodes) walk(c);
+};
+walk(root);
+return out.join("").replace(/[ \t]+/g," ").replace(/\n{3,}/g,"\n\n").trim();
+JS
+
+for url in "${urls[@]}"; do
+  curl -s -X POST "$S/url" -H 'Content-Type: application/json' \
+    -d "$(jq -nc --arg u "$url" '{url:$u}')" >/dev/null
+  ((wait_ms > 0)) && sleep "$(awk "BEGIN{print $wait_ms/1000}")"
+
+  if [[ $mode == json ]]; then
+    curl -s -X POST "$S/goog/cdp/execute" -H 'Content-Type: application/json' \
+      -d '{"cmd":"Accessibility.getFullAXTree","params":{}}' \
+      | jq -c '[.value.nodes[] | select(.ignored==false)
+                | {role:(.role.value//empty), name:((.name.value//"")|gsub("\\s+";" "))}
+                | select(.name != "" and .role != "InlineTextBox" and .role != "StaticText")]'
+    continue
+  fi
+
+  title=$(curl -s "$S/title" | jq -r '.value // ""')
+  body=$(curl -s -X POST "$S/execute/sync" -H 'Content-Type: application/json' \
+          -d "$(jq -nc --rawfile s /dev/stdin --arg m "$mode" '{script:$s,args:[$m]}' <<<"$EXTRACT")" \
+          | jq -r '.value // ""')
+  ((${#urls[@]} > 1)) && printf '\n===== %s =====\n' "$url"
+  [[ -n $title && $mode == markdown ]] && printf '# %s\n<%s>\n\n' "$title" "$url"
+  printf '%s\n' "$body"
+done

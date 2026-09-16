@@ -1,0 +1,1 @@
+{"about":"Check rules are part of the standard","rejectedAt":"/findings/0/rule","result":"check","message":{"jsonrpc":"2.0","id":1,"result":{"score":90,"scanned":3,"findings":[{"rule":"vibes","category":"a11y","severity":"warn","hint":"","count":1,"examples":[]}]}}}
