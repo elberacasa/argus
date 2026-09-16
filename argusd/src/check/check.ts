@@ -154,7 +154,13 @@ export async function check(
 
       // contrast: elements that paint their own text
       const ownText = (children.get(n) ?? []).some((c) => types[c] === 3 && clean(str(values[c])).length > 1);
-      if (ownText && contrast.length < LIMIT * 3) {
+      // WCAG 1.4.3 exempts inactive controls: a disabled button is meant to look faded.
+      let inactive = false;
+      for (let p = n, i = 0; p >= 0 && i < 8; p = parent[p] ?? -1, i++) {
+        const pa = attrs(p);
+        if (pa.has("disabled") || pa.get("aria-disabled") === "true") { inactive = true; break; }
+      }
+      if (ownText && !inactive && contrast.length < LIMIT * 3) {
         const fg = parseColor(style(n, "color"));
         if (fg && fg.a > 0) {
           const bg = backdrop(n);

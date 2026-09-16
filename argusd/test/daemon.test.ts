@@ -14,6 +14,7 @@ import type { ActResult, StepResult } from "../src/protocol/types";
 
 const REPO = join(import.meta.dir, "../..");
 const dir = mkdtempSync(join(tmpdir(), "argusd-test-"));
+const profilesAtStart = new Set(Array.from(new Bun.Glob("argusd-profile-*").scanSync({ cwd: tmpdir(), onlyFiles: false })));
 const socketPath = join(dir, "argus", "argus.sock");
 
 let service: Service;
@@ -35,6 +36,7 @@ beforeAll(async () => {
       if (pathname === "/echo-cookie") return new Response(`<title>echo</title><p>cookie:${req.headers.get("cookie") ?? "none"}</p>`, { headers: { "content-type": "text/html" } });
       if (pathname === "/slow.png") return new Promise((resolve) => setTimeout(() => resolve(new Response(Bun.file(join(REPO, "docs/media/argus.svg")), { headers: { "content-type": "image/svg+xml" } })), 900));
       if (pathname === "/gallery") return new Response('<title>Gallery</title><h1>Gallery</h1><img id="slow" alt="Slow" width="200" height="200" src="/slow.png">', { headers: { "content-type": "text/html" } });
+      if (pathname === "/hang") return new Promise<Response>((resolve) => setTimeout(() => resolve(new Response("late")), 40_000));
       if (pathname === "/quiet") return new Response("<title>Quiet</title><h1>Quiet page</h1><button>Nothing</button>", { headers: { "content-type": "text/html" } });
       return new Response("not found", { status: 404 });
     },
@@ -108,6 +110,15 @@ describe("lanes", () => {
     await client.call("lane.close", { lane: a });
     await client.call("lane.close", { lane: b });
   }, 30_000);
+
+  test("a page that never loads is a navigation failure, and the daemon keeps serving", async () => {
+    const lane = await openLane(`${base}/quiet`);
+    const r = await act(lane, [{ open: `${base}/hang` }]);
+    expect(r.steps[0]!.diagnosis?.reason).toBe("navigation-failed");
+    const { lanes } = await client.call<{ lanes: Array<{ lane: string }> }>("lane.list");
+    expect(lanes.some((l) => l.lane === lane)).toBe(true);
+    await client.call("lane.close", { lane });
+  }, 60_000);
 
   test("parallel work goes to separate lanes; one lane runs one script at a time", async () => {
     const lane = await openLane(`${base}/quiet`);
@@ -281,6 +292,9 @@ describe("check and evidence", () => {
     expect(muted?.detail?.contrast).toBeGreaterThan(2.0);
     expect(muted?.detail?.contrast).toBeLessThan(2.2);
     expect(r.score).toBeLessThan(70);
+    // WCAG exempts inactive controls: the disabled "Pay later" button is faded on purpose.
+    const contrastTexts = r.findings.find((f) => f.rule === "contrast")!.examples.map((e) => (e as { text?: string }).text);
+    expect(contrastTexts).not.toContain("Pay later");
     const runtime = await client.call<{ findings: Array<{ category: string }> }>("check", { lane, only: ["runtime"] });
     expect(new Set(runtime.findings.map((f) => f.category))).toEqual(new Set(["runtime"]));
     await client.call("lane.close", { lane });
@@ -363,12 +377,21 @@ describe("testing", () => {
 describe("shutdown", () => {
   test("stops the browser and leaves no profile behind", async () => {
     const profiles = () => new Set(Array.from(new Bun.Glob("argusd-profile-*").scanSync({ cwd: tmpdir(), onlyFiles: false })));
-    const before = profiles();
-    const lane = await openLane(`${base}/quiet`);
-    expect(lane).toMatch(/^l\d+$/);
+    const ours = [...profiles()].filter((p) => !profilesAtStart.has(p));
+    expect(ours.length).toBeGreaterThan(0);
     await service.shutdown();
-    // This daemon's profile existed before the lane opened (the browser was
-    // already up) and must be gone now; nothing else may have been left.
-    expect([...profiles()].filter((p) => before.has(p))).toEqual([]);
+    // Every profile this daemon created is gone; others on the machine are not ours to judge.
+    expect(ours.filter((p) => profiles().has(p))).toEqual([]);
   }, 30_000);
+
+  test("profiles abandoned by a daemon that was killed are swept on the next launch", async () => {
+    const { Browser } = await import("../src/cdp/pipe");
+    const dead = mkdtempSync(join(tmpdir(), "argusd-profile-"));
+    await Bun.write(join(dead, "argusd.owner"), "2147483646\n"); // a pid that cannot exist
+    const foreign = mkdtempSync(join(tmpdir(), "argusd-profile-"));  // no owner file: not ours, left alone
+    Browser.sweepAbandonedProfiles();
+    expect(await Bun.file(join(dead, "argusd.owner")).exists()).toBe(false);
+    expect(statSync(foreign).isDirectory()).toBe(true);
+    rmSync(foreign, { recursive: true, force: true });
+  });
 });

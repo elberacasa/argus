@@ -10,7 +10,7 @@
 // parameter is a compile error, not a runtime surprise.
 
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Readable, Writable } from "node:stream";
@@ -47,7 +47,29 @@ export interface LaunchOptions {
   timeoutMs?: number;
 }
 
+/** Written into every profile argusd creates: the pid of the daemon that owns it. */
+const OWNER_FILE = "argusd.owner";
+
 export class Browser {
+  /**
+   * Remove profiles whose owning daemon is gone. A daemon that exits normally
+   * removes its own; one that is killed cannot, and its browser has already
+   * exited with the pipe. Only directories carrying an owner file are touched.
+   */
+  static sweepAbandonedProfiles(): void {
+    for (const name of readdirSync(tmpdir())) {
+      if (!name.startsWith("argusd-profile-")) continue;
+      const dir = join(tmpdir(), name);
+      const ownerFile = join(dir, OWNER_FILE);
+      if (!existsSync(ownerFile)) continue;
+      const owner = Number(readFileSync(ownerFile, "utf8"));
+      if (!Number.isInteger(owner) || owner <= 0) continue;
+      let alive = true;
+      try { process.kill(owner, 0); } catch { alive = false; }
+      if (!alive) rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
   private nextId = 0;
   private buffer = "";
   private readonly pending = new Map<number, Pending>();
@@ -68,7 +90,9 @@ export class Browser {
 
   /** Launch a browser argus owns: a fresh profile, its own process group. */
   static async launch(options: LaunchOptions = {}): Promise<Browser> {
+    Browser.sweepAbandonedProfiles();
     const profileDir = mkdtempSync(join(tmpdir(), "argusd-profile-"));
+    writeFileSync(join(profileDir, OWNER_FILE), `${process.pid}\n`);
     const args = [
       "--remote-debugging-pipe",
       `--user-data-dir=${profileDir}`,
@@ -229,12 +253,18 @@ export class Page {
 
   async navigate(url: string, timeoutMs = 30_000): Promise<{ errorText?: string }> {
     const loaded = this.browser.waitFor("Page.loadEventFired", (_, sessionId) => sessionId === this.sessionId, timeoutMs);
-    const { errorText } = await this.send("Page.navigate", { url });
-    if (errorText) {
-      loaded.catch(() => {});
-      return { errorText };
+    // Handled from the start: if the navigate command itself stalls, the load
+    // wait times out first, and an unobserved rejection would end the daemon.
+    const settled = loaded.then(() => null, (error: unknown) => error as Error);
+    let errorText: string | undefined;
+    try {
+      ({ errorText } = await this.send("Page.navigate", { url }));
+    } catch (error) {
+      return { errorText: error instanceof Error ? error.message : String(error) };
     }
-    await loaded;
+    if (errorText) return { errorText };
+    const failure = await settled;
+    if (failure) return { errorText: `the page did not finish loading within ${timeoutMs}ms` };
     return {};
   }
 

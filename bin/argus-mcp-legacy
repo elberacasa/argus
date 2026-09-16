@@ -172,7 +172,7 @@ while IFS= read -r line; do
       # --json keeps the delta machine-readable; the CLI already shapes it.
       see=()
       [[ $(jq -r '.see // false' <<<"$a") == true ]] && see=(--see)
-      out=$(timeout 60 "$ROOT/bin/argus" --json "${see[@]}" --lane "$lane" "${argv[@]}" 2>&1); rc=$?
+      out=$(timeout 60 "$ROOT/bin/argus-legacy" --json "${see[@]}" --lane "$lane" "${argv[@]}" 2>&1); rc=$?
       [[ -z $out ]] && out="(no output)"
       img=$(jq -r '.image // .delta.visual.image // empty' <<<"$out" 2>/dev/null)
       if [[ -n $img && -f $img ]] && (( rc == 0 )); then

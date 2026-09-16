@@ -7,7 +7,7 @@
 # lying to an agent somewhere -- which is worse than having no check at all.
 
 cd "$(dirname "$0")/.." || exit 1
-ARGUS=./bin/argus
+ARGUS=./bin/argus-legacy
 ROOTDIR=$PWD
 FIXTURE="file://$PWD/test/fixture.html"
 export ARGUS_LANE=${ARGUS_LANE:-9}
@@ -37,7 +37,7 @@ if lint=$(python3 test/lint-locals.py 2>&1); then
 else
   bad "no local reads a name it is declaring" "$lint"
 fi
-for f in bin/argus bin/argus-watch bin/argus-mcp bin/argus-mcp-legacy bin/argus-manifest bin/argus-own bin/argus-bar bin/argus-nest lib/*.sh test/*.sh; do
+for f in bin/argus bin/argus-legacy bin/argus-watch bin/argus-mcp bin/argus-mcp-legacy bin/argus-manifest bin/argus-own bin/argus-bar bin/argus-nest lib/*.sh test/*.sh; do
   bash -n "$f" 2>/dev/null || bad "bash -n $f" "$(bash -n "$f" 2>&1)"
 done
 ok "every script parses"

@@ -104,12 +104,18 @@ argus desk up                # an invisible monitor for agents
 test/demo-desk.sh            # watch four agents from the bar
 ```
 
-Drive a browser yourself:
+Drive a browser yourself. The `argus` command talks to the same daemon agents
+use, starting it on first use:
 
-```bash
-argus open https://example.com
-argus click "link:Learn more"
-argus audit
+```console
+$ argus open https://example.com          # what loaded, plus an outline with refs
+$ argus click "button:Place order"        # exit 3 and the reason when it cannot land
+✗ click button:Place order e0.39 · covered  7ms
+  button "Place order" is covered by generic div#scrim at (92, 260); dismiss or close it first.
+  blocker: generic:div#scrim e0.79
+$ argus act '[{"click":"button:Accept"},{"click":"button:Place order","expect":{"appears":"Order placed"}}]'
+$ argus check                             # accessibility, layout and runtime findings
+$ argus --lane phone viewport 390x844     # lanes are named, each its own browser
 ```
 
 ### Connect an agent
@@ -205,11 +211,12 @@ Measured on one Omarchy machine ([method](docs/performance.md)).
 
 ## Status
 
-Argus is a **preview**. The `argus` command, desks, nests, the bar widget and
-the own-browser bridge work today and are tested on every change. `argusd`
-speaks Protocol v0 for browser lanes: verified `act`, outlines, `check`, priced
-screenshots and crops, `run`, `sweep` and traces. Desk, own-browser and
-native-app lanes move into the daemon next. The protocol may change until v1.
+Argus is a **preview**. `argusd` serves browser lanes over Protocol v0: verified
+`act`, outlines, `check`, priced screenshots and crops, `run`, `sweep` and
+traces, through both the `argus` command and the MCP server. Desks, your own
+browser, nests, the bar, visual deltas and marks still run on the original bash
+implementation (`argus-legacy`), which `argus` hands those commands to; they
+move into the daemon next. The protocol may change until v1.
 
 ## Development
 

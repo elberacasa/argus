@@ -3,6 +3,7 @@
 //   argusd serve [--socket PATH] [--headful]   run the daemon
 //   argusd call METHOD [JSON]                   one request, result as JSON
 //   argusd scene URL...                         print the Scene of pages (diagnostic)
+//   argusd cli ARGS...                          the argus command line (bin/argus)
 //   argusd mcp                                  MCP over stdio (starts the daemon if needed)
 //   argusd pointer SOCKET WxH move|click X Y [right|middle]
 //                                               a virtual pointer on one compositor (a nested desk)
@@ -16,6 +17,7 @@ import { captureScene } from "./scene/snapshot";
 import { outline } from "./scene/outline";
 import { VirtualPointer, type Button } from "./wayland/pointer";
 import { McpServer } from "./mcp/server";
+import { cli } from "./cli/main";
 
 function flag(args: string[], name: string): string | undefined {
   const i = args.indexOf(name);
@@ -40,6 +42,9 @@ async function main(): Promise<void> {
         log: (line) => { if (process.env.ARGUSD_LOG) console.error(line); },
       });
       console.error(`argusd ${VERSION} listening on ${server.socketPath}`);
+      // One lane's failure must never end every lane: log what escaped, keep serving.
+      process.on("unhandledRejection", (reason) => console.error(`argusd: unhandled rejection: ${reason instanceof Error ? reason.stack : String(reason)}`));
+      process.on("uncaughtException", (error) => console.error(`argusd: uncaught exception: ${error.stack ?? error.message}`));
       const stop = async () => {
         await server.stop();
         await service.shutdown();
@@ -80,6 +85,9 @@ async function main(): Promise<void> {
       }
       return;
     }
+
+    case "cli":
+      process.exit(await cli(args));
 
     case "mcp": {
       const socket = flag(args, "--socket") ?? process.env.ARGUS_SOCKET;

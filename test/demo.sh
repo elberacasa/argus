@@ -6,13 +6,13 @@
 # teaches you nothing.
 #
 #   ./test/demo.sh 12      # in one terminal
-#   ./bin/argus watch      # in another
+#   ./bin/argus-legacy watch      # in another
 
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
 N=${1:-12}
 FIXTURE="file://$PWD/test/fixture.html"
-A=./bin/argus
+A=./bin/argus-legacy
 
 SITES=(
   "https://example.com" "https://example.org" "https://example.net"
