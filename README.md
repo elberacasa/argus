@@ -115,11 +115,23 @@ argus audit
 ### Connect an agent
 
 Agents started inside this folder pick up the included `.mcp.json`. Elsewhere,
-point any MCP client (Claude Code, opencode, Codex, …) at the server:
+point any MCP client (Claude Code, opencode, Codex, …) at the server. It starts
+the Argus daemon by itself.
 
 ```json
 { "mcpServers": { "argus": { "command": "/path/to/argus/bin/argus-mcp" } } }
 ```
+
+| Tool | What the agent gets |
+|---|---|
+| `browser_open` | what loaded, plus an outline with refs and which actions are covered or disabled |
+| `browser_act` | a verified script: stops at the first surprise and says why |
+| `browser_click` · `type` · `press` · `select` · `wait` | one verified step each, with an optional `expect` |
+| `browser_outline` · `browser_find` | the page in a few hundred tokens; elements in frames and shadow roots |
+| `browser_check` | accessibility, layout and runtime findings with measured values |
+| `browser_look` · `browser_screenshot` | the pixels themselves, with their token cost |
+| `browser_run` · `browser_sweep` | tests with verdicts; one flow across viewports and color schemes |
+| `omarchy_groups` · `commands` · `help` · `run` | the whole OS, progressively; destructive commands need confirmation |
 
 ## How it works
 

@@ -26,6 +26,9 @@ const SETTLE_MAX_MS = 3000;
 const NAV_MAX_MS = 15_000;
 const LIST_LIMIT = 12;
 
+/** How a field is named in observations, the same for typed and page-filled values: role:name. */
+const fieldLabel = (e: SceneElement) => `${e.role}:${e.name || e.selector}`;
+
 const VERBS: Verb[] = ["open", "click", "hover", "type", "press", "select", "upload", "scroll", "dialog", "viewport", "wait"];
 
 export function verbOf(step: Step): Verb {
@@ -184,7 +187,7 @@ async function perform(lane: LaneContext, step: Step, verb: Verb, scene: Scene):
       }`);
       await page.send("Input.insertText", { text });
       const to = await fieldValue(page, node);
-      const fields: Observation["fields"] = from === to ? [] : [{ target: label(reached.element), ...(from ? { from } : {}), to: to ?? "" }];
+      const fields: Observation["fields"] = from === to ? [] : [{ target: fieldLabel(reached.element), ...(from ? { from } : {}), to: to ?? "" }];
       if (to !== text && !(to ?? "").includes(text)) {
         return {
           ok: false, target: reached.element, match: reached.match, fields, expectsEffect: false,
@@ -224,7 +227,7 @@ async function perform(lane: LaneContext, step: Step, verb: Verb, scene: Scene):
           ok: false, target: reached.element, match: reached.match, expectsEffect: false,
           diagnosis: { reason: "not-found", hint: `${label(reached.element)} has no option "${option}"${chosen.options ? `; it has: ${chosen.options.join(", ")}` : ""}.`, didYouMean: [] },
         };
-      return { ok: true, target: reached.element, match: reached.match, expectsEffect: false, fields: [{ target: label(reached.element), to: chosen?.value ?? option }] };
+      return { ok: true, target: reached.element, match: reached.match, expectsEffect: false, fields: [{ target: fieldLabel(reached.element), to: chosen?.value ?? option }] };
     }
 
     case "upload": {
@@ -238,7 +241,7 @@ async function perform(lane: LaneContext, step: Step, verb: Verb, scene: Scene):
           ok: false, target: found.element, match: found.match, expectsEffect: false,
           diagnosis: { reason: "expectation-failed", hint: `${label(found.element)} holds ${count} file(s), not ${files.length}.`, failed: [{ condition: `${files.length} file(s) set`, actual: count }] },
         };
-      return { ok: true, target: found.element, match: found.match, expectsEffect: false, fields: [{ target: label(found.element), to: files.map((f) => f.split("/").pop()).join(", ") }] };
+      return { ok: true, target: found.element, match: found.match, expectsEffect: false, fields: [{ target: fieldLabel(found.element), to: files.map((f) => f.split("/").pop()).join(", ") }] };
     }
 
     case "scroll": {

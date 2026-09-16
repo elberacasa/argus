@@ -3,6 +3,7 @@
 //   argusd serve [--socket PATH] [--headful]   run the daemon
 //   argusd call METHOD [JSON]                   one request, result as JSON
 //   argusd scene URL...                         print the Scene of pages (diagnostic)
+//   argusd mcp                                  MCP over stdio (starts the daemon if needed)
 //   argusd pointer SOCKET WxH move|click X Y [right|middle]
 //                                               a virtual pointer on one compositor (a nested desk)
 
@@ -14,6 +15,7 @@ import { Service, VERSION } from "./rpc/service";
 import { captureScene } from "./scene/snapshot";
 import { outline } from "./scene/outline";
 import { VirtualPointer, type Button } from "./wayland/pointer";
+import { McpServer } from "./mcp/server";
 
 function flag(args: string[], name: string): string | undefined {
   const i = args.indexOf(name);
@@ -79,6 +81,12 @@ async function main(): Promise<void> {
       return;
     }
 
+    case "mcp": {
+      const socket = flag(args, "--socket") ?? process.env.ARGUS_SOCKET;
+      await new McpServer(socket ? { socketPath: socket } : {}).serveStdio();
+      return;
+    }
+
     case "pointer": {
       const [socket, size, action, xs, ys, button] = args;
       const [w, h] = (size ?? "").split("x").map(Number);
@@ -103,7 +111,7 @@ async function main(): Promise<void> {
     }
 
     default:
-      console.error("usage: argusd serve|call|scene|pointer");
+      console.error("usage: argusd serve|call|mcp|scene|pointer");
       process.exit(1);
   }
 }

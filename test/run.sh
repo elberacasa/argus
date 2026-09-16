@@ -37,7 +37,7 @@ if lint=$(python3 test/lint-locals.py 2>&1); then
 else
   bad "no local reads a name it is declaring" "$lint"
 fi
-for f in bin/argus bin/argus-watch bin/argus-mcp bin/argus-manifest bin/argus-own bin/argus-bar bin/argus-nest lib/*.sh test/*.sh; do
+for f in bin/argus bin/argus-watch bin/argus-mcp bin/argus-mcp-legacy bin/argus-manifest bin/argus-own bin/argus-bar bin/argus-nest lib/*.sh test/*.sh; do
   bash -n "$f" 2>/dev/null || bad "bash -n $f" "$(bash -n "$f" 2>&1)"
 done
 ok "every script parses"
@@ -144,8 +144,8 @@ out=$("$ARGUS" --lane 20 open "$FIXTURE" 2>&1)
 "$ARGUS" pool 2>/dev/null | grep -q 'pool size' && ok "pool reports its state" || bad "pool reports its state" ""
 for l in 20 21; do "$ARGUS" --lane $l close >/dev/null 2>&1; done
 
-printf '\n\033[2mmcp surface\033[0m\n'
-mcp() { ./bin/argus-mcp 2>/dev/null; }
+printf '\n\033[2mmcp surface (legacy bash server)\033[0m\n'
+mcp() { ./bin/argus-mcp-legacy 2>/dev/null; }
 MCPOUT=$({
   echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
   echo '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
@@ -317,7 +317,7 @@ jq -e '.delta.visual.changed and (.delta.visual.regions|length) == 1' <<<"$R" >/
 ARGUS_LANE=$ARGUS_LANE bash -c 'source lib/wire.sh; source lib/trace.sh; session_open >/dev/null 2>&1; js_raw "document.activeElement && document.activeElement.blur(); return 1" >/dev/null'
 R=$("$ARGUS" --json --see key Escape 2>/dev/null)
 [[ $(jq -r .delta.visual.changed <<<"$R") == false ]] && ok "an action that changes nothing on screen says so" || bad "no visual change" "$(jq -c .delta.visual <<<"$R")"
-M=$({ jq -nc --arg f "$FIXTURE" '{jsonrpc:"2.0",id:1,method:"tools/call",params:{name:"browser_marks",arguments:{lane:32}}}'; } | ./bin/argus-mcp 2>/dev/null)
+M=$({ jq -nc --arg f "$FIXTURE" '{jsonrpc:"2.0",id:1,method:"tools/call",params:{name:"browser_marks",arguments:{lane:32}}}'; } | ./bin/argus-mcp-legacy 2>/dev/null)
 jq -e '.result.content | map(.type) | index("image")' <<<"$M" >/dev/null \
   && ok "over MCP the image itself is in the result, not just a path" || bad "mcp image block" "$(jq -c '[.result.content[].type]' <<<"$M")"
 "$ARGUS" --lane 32 close >/dev/null 2>&1

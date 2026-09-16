@@ -1,0 +1,189 @@
+#!/bin/bash
+
+# argus-mcp-legacy -- the bash prototype's MCP server, kept while argusd takes over.
+#
+# Two surfaces. The Omarchy command catalogue: 367 visible commands, which flat
+# would cost ~15k tokens of context before the agent has done anything, so it is
+# served progressively -- a 180-token group index, drill into a group, then run.
+# And the browser: actions that report what they *changed* rather than what the
+# page now is, at roughly a hundred tokens a step.
+#
+# omarchy-agent already abstracts fourteen coding agents. Everything here is
+# reachable by all of them, which is the only reason to speak MCP at all.
+
+set -uo pipefail
+ROOT=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)
+MANIFEST=${ARGUS_MANIFEST:-$ROOT/run/manifest.jsonl}
+DANGER=$ROOT/lib/danger.txt
+mkdir -p "$(dirname "$MANIFEST")"
+
+# The catalogue only changes when Omarchy updates, so build it once and cache it.
+if [[ ! -s $MANIFEST || /usr/share/omarchy/bin -nt $MANIFEST ]]; then
+  "$ROOT/bin/argus-manifest" > "$MANIFEST" 2>/dev/null
+fi
+
+danger_reason() {
+  local cmd=$1 prefix reason
+  while read -r prefix reason; do
+    [[ -z $prefix || $prefix == \#* ]] && continue
+    [[ $cmd == "$prefix"* ]] && { echo "$reason"; return 0; }
+  done < "$DANGER"
+  return 1
+}
+
+emit() { printf '%s\n' "$1"; }
+result() { emit "$(jq -nc --argjson id "$1" --arg t "$2" \
+  '{jsonrpc:"2.0",id:$id,result:{content:[{type:"text",text:$t}]}}')"; }
+# Text plus the picture itself. An image path is useless to a model that cannot
+# open files; the eyes only exist for an agent if the pixels are in the result.
+result_with_image() { # <id> <text> <png>
+  emit "$(jq -nc --argjson id "$1" --arg t "$2" --rawfile img <(base64 -w0 "$3") \
+    '{jsonrpc:"2.0",id:$id,result:{content:[{type:"text",text:$t},{type:"image",data:$img,mimeType:"image/png"}]}}')"
+}
+error()  { emit "$(jq -nc --argjson id "$1" --arg t "$2" \
+  '{jsonrpc:"2.0",id:$id,result:{content:[{type:"text",text:$t}],isError:true}}')"; }
+
+TOOLS=$(jq -nc '[
+ {name:"omarchy_groups",
+  description:"List every group of Omarchy system commands with how many commands each holds. Start here: this is the whole operating system in ~180 tokens. Then call omarchy_commands on the group you need.",
+  inputSchema:{type:"object",properties:{},required:[]}},
+ {name:"omarchy_commands",
+  description:"List the commands in one Omarchy group, with a one-line summary for each. Use after omarchy_groups.",
+  inputSchema:{type:"object",properties:{group:{type:"string",description:"Group name, e.g. theme, audio, capture, network"}},required:["group"]}},
+ {name:"omarchy_help",
+  description:"Full detail for one Omarchy command: summary, argument signature, worked examples, and whether it is destructive.",
+  inputSchema:{type:"object",properties:{command:{type:"string",description:"Command name, e.g. omarchy-theme-set"}},required:["command"]}},
+ {name:"omarchy_run",
+  description:"Run an Omarchy command and return its output. Destructive commands are refused unless confirm is true; always show the user what you are about to run and why before setting it.",
+  inputSchema:{type:"object",properties:{
+    command:{type:"string",description:"Command name, e.g. omarchy-theme-set"},
+    args:{type:"array",items:{type:"string"},description:"Positional arguments"},
+    confirm:{type:"boolean",description:"Required to run a command flagged destructive"}},
+   required:["command"]}},
+
+ {name:"browser_open",
+  description:"Navigate a browser lane to a URL and report what loaded: the text that rendered, console errors thrown during parse, requests that failed, and how long until the page settled. Lanes are independent browser tabs -- use different lane numbers to work on several sites at once.",
+  inputSchema:{type:"object",properties:{
+    url:{type:"string"},
+    lane:{type:"integer",description:"Browser lane, default 0. Each lane is its own tab with its own history."},
+    see:{type:"boolean",description:"Also return an image of what visibly changed."}},
+   required:["url"]}},
+ {name:"browser_click",
+  description:"Click an element by its role and accessible name, e.g. \"button:Sign in\" or \"link:Learn more\" -- never coordinates. Returns what the click changed. If it cannot click, it returns WHY: covered (naming the element painted over it and its z-index), disabled, hidden, zero-size, offscreen, ambiguous (listing candidates), or not-found (suggesting near matches). Act on that diagnosis rather than retrying blindly.",
+  inputSchema:{type:"object",properties:{
+    target:{type:"string",description:"role:name, e.g. button:Submit. Role may be omitted to match any element."},
+    index:{type:"integer",description:"Which match to use when the name is ambiguous, from the candidates listed in a previous ambiguous result."},
+    lane:{type:"integer"},
+    see:{type:"boolean",description:"Also return an image of only the regions that visibly changed, before beside after. Catches changes text cannot show: styling, animation, layout. Costs visual tokens in proportion to how much changed."}},
+   required:["target"]}},
+ {name:"browser_type",
+  description:"Focus a field by role:name and type into it. Returns the field value change, so you can confirm the characters actually landed.",
+  inputSchema:{type:"object",properties:{
+    target:{type:"string",description:"role:name, e.g. textbox:Email address"},
+    text:{type:"string"}, lane:{type:"integer"}, see:{type:"boolean"}},
+   required:["target","text"]}},
+ {name:"browser_key",
+  description:"Dispatch a key: Enter, Tab, Escape, Backspace, or an arrow key. Returns what changed.",
+  inputSchema:{type:"object",properties:{key:{type:"string"},lane:{type:"integer"},see:{type:"boolean"}},required:["key"]}},
+ {name:"browser_audit",
+  description:"What is wrong with the page in this lane, measured from real layout and computed style: WCAG contrast failures with the measured ratio, tap targets under 24x24, horizontal overflow, controls with no accessible name, missing alt text, skipped heading levels, text under 12px, duplicate ids. Run this after building or changing a UI -- it is the review a human would give.",
+  inputSchema:{type:"object",properties:{lane:{type:"integer"}},required:[]}},
+ {name:"browser_text",
+  description:"The readable text of the page in this lane. Use when you need the content rather than the effect of an action.",
+  inputSchema:{type:"object",properties:{lane:{type:"integer"}},required:[]}},
+ {name:"browser_trace",
+  description:"Replay what this lane did, most recent last: every action with its timing, its diagnosis if it failed, and any audit scores. Read this to understand a run that went wrong instead of repeating it.",
+  inputSchema:{type:"object",properties:{lane:{type:"integer"},n:{type:"integer",description:"How many steps, default 20"}},required:[]}},
+ {name:"browser_look",
+  description:"See one element, or the whole viewport, as an image. Cropped to the element (with a little context), so looking at a single button costs tens of visual tokens instead of ~1,300 for the screen. Works on elements that cannot be clicked -- look at a covered control to see what is on top of it.",
+  inputSchema:{type:"object",properties:{
+    target:{type:"string",description:"role:name of the element to look at. Omit to see the viewport."},
+    lane:{type:"integer"}},required:[]}},
+ {name:"browser_marks",
+  description:"A screenshot with every interactive element numbered, plus a legend mapping each number to the role:name you can pass to browser_click. Elements a real click could not reach (covered by something) are marked red and flagged. Use when you need to see the page and act on it precisely.",
+  inputSchema:{type:"object",properties:{lane:{type:"integer"}},required:[]}},
+ {name:"browser_close",
+  description:"Release a browser lane and its tab.",
+  inputSchema:{type:"object",properties:{lane:{type:"integer"}},required:[]}}]')
+
+while IFS= read -r line; do
+  [[ -z $line ]] && continue
+  method=$(jq -r '.method // empty' <<<"$line" 2>/dev/null) || continue
+  id=$(jq -c '.id // null' <<<"$line" 2>/dev/null)
+
+  case "$method" in
+  initialize)
+    emit "$(jq -nc --argjson id "$id" '{jsonrpc:"2.0",id:$id,result:{
+      protocolVersion:"2024-11-05",capabilities:{tools:{}},
+      serverInfo:{name:"argus",version:"0.1.0"}}}')" ;;
+  notifications/initialized|notifications/*) ;;
+  tools/list)
+    emit "$(jq -nc --argjson id "$id" --argjson t "$TOOLS" '{jsonrpc:"2.0",id:$id,result:{tools:$t}}')" ;;
+  tools/call)
+    name=$(jq -r '.params.name' <<<"$line")
+    a=$(jq -c '.params.arguments // {}' <<<"$line")
+    case "$name" in
+    omarchy_groups)
+      result "$id" "$(jq -s -r 'group_by(.group)|sort_by(-length)[]
+        |"\(.[0].group) (\(length))"' "$MANIFEST" | paste -sd'  ')" ;;
+    omarchy_commands)
+      g=$(jq -r '.group//""' <<<"$a")
+      out=$(jq -r --arg g "$g" 'select(.group==$g)|"\(.name)  -- \(.summary)"' "$MANIFEST")
+      [[ -z $out ]] && error "$id" "No group '$g'. Call omarchy_groups for the list." \
+                    || result "$id" "$out" ;;
+    omarchy_help)
+      c=$(jq -r '.command//""' <<<"$a")
+      e=$(jq -c --arg c "$c" 'select(.name==$c)' "$MANIFEST" | head -1)
+      if [[ -z $e ]]; then error "$id" "Unknown command '$c'."; else
+        txt=$(jq -r '"\(.name)\n  \(.summary)"
+              + (if .args then "\n  usage: \(.name) \(.args)" else "\n  takes no arguments" end)
+              + (if .examples then "\n  examples:\n" + (.examples|map("    "+.)|join("\n")) else "" end)' <<<"$e")
+        if r=$(danger_reason "$c"); then txt+=$'\n  DESTRUCTIVE: '"$r"$'\n  requires confirm:true'; fi
+        result "$id" "$txt"
+      fi ;;
+    omarchy_run)
+      c=$(jq -r '.command//""' <<<"$a")
+      confirm=$(jq -r '.confirm//false' <<<"$a")
+      if ! jq -e --arg c "$c" 'select(.name==$c)' "$MANIFEST" >/dev/null 2>&1; then
+        error "$id" "Unknown or hidden command '$c'."; continue; fi
+      if r=$(danger_reason "$c") && [[ $confirm != true ]]; then
+        error "$id" "'$c' is destructive: $r. Explain the change to the user, then retry with confirm:true."; continue; fi
+      mapfile -t argv < <(jq -r '.args//[]|.[]' <<<"$a")
+      out=$(timeout 120 "/usr/share/omarchy/bin/$c" "${argv[@]}" 2>&1); rc=$?
+      [[ -z $out ]] && out="(no output)"
+      ((rc == 0)) && result "$id" "$out" || error "$id" "exit $rc"$'\n'"$out" ;;
+    browser_*)
+      lane=$(jq -r '.lane // 0' <<<"$a")
+      argv=()
+      case "$name" in
+      browser_open)  argv=(open  "$(jq -r '.url'    <<<"$a")") ;;
+      browser_click) argv=(click "$(jq -r '.target' <<<"$a")")
+                     idx=$(jq -r '.index // empty' <<<"$a"); [[ -n $idx ]] && argv+=("$idx") ;;
+      browser_type)  argv=(type  "$(jq -r '.target' <<<"$a")" "$(jq -r '.text' <<<"$a")") ;;
+      browser_key)   argv=(key   "$(jq -r '.key'    <<<"$a")") ;;
+      browser_audit) argv=(audit) ;;
+      browser_text)  argv=(text) ;;
+      browser_trace) argv=(trace -n "$(jq -r '.n // 20' <<<"$a")") ;;
+      browser_look)  argv=(look); t=$(jq -r '.target // empty' <<<"$a"); [[ -n $t ]] && argv+=("$t") ;;
+      browser_marks) argv=(marks) ;;
+      browser_close) argv=(close) ;;
+      *) error "$id" "Unknown browser tool: $name"; continue ;;
+      esac
+      # --json keeps the delta machine-readable; the CLI already shapes it.
+      see=()
+      [[ $(jq -r '.see // false' <<<"$a") == true ]] && see=(--see)
+      out=$(timeout 60 "$ROOT/bin/argus" --json "${see[@]}" --lane "$lane" "${argv[@]}" 2>&1); rc=$?
+      [[ -z $out ]] && out="(no output)"
+      img=$(jq -r '.image // .delta.visual.image // empty' <<<"$out" 2>/dev/null)
+      if [[ -n $img && -f $img ]] && (( rc == 0 )); then
+        result_with_image "$id" "$out" "$img"; continue
+      fi
+      # Exit 3 is a located-but-unactionable element: a diagnosis, not a crash,
+      # and the agent needs to read it as the result rather than as an error.
+      if (( rc == 0 )) || (( rc == 3 )); then result "$id" "$out"; else error "$id" "$out"; fi ;;
+    *) error "$id" "Unknown tool: $name" ;;
+    esac ;;
+  *) [[ $id != null ]] && emit "$(jq -nc --argjson id "$id" \
+       '{jsonrpc:"2.0",id:$id,error:{code:-32601,message:"Method not found"}}')" ;;
+  esac
+done

@@ -1,7 +1,7 @@
 // The Argus socket: JSON-RPC 2.0, one message per line, over a unix socket
 // that only this user can open. No TCP, ever (constitution: no ports).
 
-import { chmodSync, existsSync, mkdirSync, statSync, unlinkSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type { Socket } from "bun";
 import { ErrorCode, RpcError } from "../protocol/types";
@@ -109,12 +109,15 @@ export async function serve(service: Service, options: ServerOptions) {
     },
   });
   chmodSync(socketPath, 0o600);
+  // Who owns this socket, so a client that started the daemon can stop exactly it.
+  writeFileSync(`${socketPath}.pid`, `${process.pid}\n`, { mode: 0o600 });
 
   return {
     socketPath,
     async stop() {
       listener.stop(true);
       try { unlinkSync(socketPath); } catch { /* gone */ }
+      try { unlinkSync(`${socketPath}.pid`); } catch { /* gone */ }
     },
   };
 }
