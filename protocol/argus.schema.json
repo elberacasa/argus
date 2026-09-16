@@ -421,6 +421,8 @@
     },
 
     "result": {
+      "evidence.look": { "$ref": "#/$defs/Evidence" },
+      "evidence.shot": { "$ref": "#/$defs/Evidence" },
       "hello": {
         "type": "object", "required": ["protocol", "server", "capabilities"],
         "properties": {

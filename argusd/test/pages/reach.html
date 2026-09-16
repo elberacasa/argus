@@ -30,7 +30,7 @@
   customElements.define("shadow-card", class extends HTMLElement {
     connectedCallback() {
       const root = this.attachShadow({ mode: "open" });
-      root.innerHTML = '<button>Shadow button</button>';
+      root.innerHTML = '<button>Shadow button</button><p style="color:#c8c8c8;margin:4px 0">Faint text inside a shadow root</p>';
       root.querySelector("button").onclick = () => { document.getElementById("log").textContent = "Clicked in shadow."; };
     }
   });

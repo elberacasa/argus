@@ -7,6 +7,9 @@ import { Lanes } from "../lane/lanes";
 import { ErrorCode, RpcError, type ActResult, type LaneKind, type Step, type Target, type Viewport } from "../protocol/types";
 import { captureScene } from "../scene/snapshot";
 import { outline } from "../scene/outline";
+import { check, CATEGORIES, type Category } from "../check/check";
+import { look, shot } from "../evidence/evidence";
+import { Trace } from "../trace/trace";
 
 export const VERSION = "0.1.0";
 
@@ -14,10 +17,12 @@ export interface Notify { (method: string, params: Record<string, unknown>): voi
 
 export class Service {
   readonly lanes: Lanes;
+  readonly trace: Trace;
   private readonly listeners = new Set<Notify>();
 
-  constructor(options: { executable?: string; headless?: boolean } = {}) {
-    this.lanes = new Lanes(options, {
+  constructor(options: { executable?: string; headless?: boolean; traceDir?: string } = {}) {
+    this.trace = new Trace(options.traceDir);
+    this.lanes = new Lanes({ ...(options.executable ? { executable: options.executable } : {}), ...(options.headless !== undefined ? { headless: options.headless } : {}) }, {
       lane: (e) => this.emit("event.lane", e),
     });
   }
@@ -31,13 +36,34 @@ export class Service {
     for (const l of this.listeners) l(method, params);
   }
 
+  /** Methods whose calls are written to the trace: everything that acts or judges. */
+  private static readonly TRACED = new Set(["act", "run", "sweep", "check", "lane.open", "lane.close"]);
+
   async call(method: string, params: Record<string, unknown>): Promise<unknown> {
+    if (!Service.TRACED.has(method)) return this.dispatch(method, params);
+    const t0 = performance.now();
+    let result: unknown, ok = false;
+    try {
+      result = await this.dispatch(method, params);
+      const r = result as { ok?: boolean; verdict?: string };
+      ok = r?.ok ?? (r?.verdict ? r.verdict === "pass" : true);
+      return result;
+    } catch (error) {
+      result = { error: error instanceof Error ? error.message : String(error) };
+      throw error;
+    } finally {
+      const lane = (params.lane as string | undefined) ?? (result as { lane?: string } | undefined)?.lane ?? null;
+      this.trace.record(method, lane, params, result, ok, Math.round(performance.now() - t0));
+    }
+  }
+
+  private async dispatch(method: string, params: Record<string, unknown>): Promise<unknown> {
     switch (method) {
       case "hello":
         return {
           protocol: "0",
           server: { name: "argusd", version: VERSION },
-          capabilities: { lanes: this.lanes.kinds, eyes: false, decider: "none", check: [] },
+          capabilities: { lanes: this.lanes.kinds, eyes: true, decider: "none", check: CATEGORIES },
         };
 
       case "lane.open":
@@ -71,6 +97,46 @@ export class Service {
           return observation;
         });
 
+      case "check":
+        return this.lanes.withLane(params.lane as string, async (lane) => {
+          const scene = await captureScene(lane.page);
+          let within: number | undefined;
+          if (params.target !== undefined) {
+            const found = locate(scene, params.target as Target);
+            if (!found.ok) throw new RpcError(ErrorCode.invalidParams, found.diagnosis.hint, found.diagnosis);
+            within = found.element.backendNodeId;
+          }
+          return check(lane.page, lane.probe, lane.openMark, scene, {
+            ...(params.only ? { only: params.only as Category[] } : {}),
+            ...(within !== undefined ? { within } : {}),
+          });
+        });
+
+      case "evidence.shot":
+        return this.lanes.withLane(params.lane as string, (lane) => shot(lane.page, lane.id, params.full === true));
+
+      case "evidence.look":
+        return this.lanes.withLane(params.lane as string, async (lane) => {
+          const scene = await captureScene(lane.page);
+          if (params.target === undefined) return look(lane.page, lane.id, scene, null);
+          const found = locate(scene, params.target as Target);
+          // A covered or ambiguous target is still worth seeing; only a missing one is an error.
+          const element = found.ok ? found.element
+            : found.diagnosis.reason === "ambiguous" ? scene.elements.find((e) => e.ref === found.diagnosis.candidates?.[0]?.ref) ?? null
+            : null;
+          if (!element) throw new RpcError(ErrorCode.invalidParams, found.ok ? "" : found.diagnosis.hint, found.ok ? undefined : found.diagnosis);
+          return look(lane.page, lane.id, scene, element, (params.pad as number | undefined) ?? 16);
+        });
+
+      case "trace.list":
+        return this.trace.list({ ...(params.lane ? { lane: params.lane as string } : {}), ...(params.limit ? { limit: params.limit as number } : {}) });
+
+      case "trace.get": {
+        const entry = this.trace.get(params.id as string);
+        if (!entry) throw new RpcError(ErrorCode.invalidParams, `no trace entry ${params.id as string}`);
+        return entry;
+      }
+
       case "run":
         return this.run(params as { lane?: string; kind?: LaneKind; name: string; steps: Step[] });
 
@@ -95,7 +161,9 @@ export class Service {
     const lane = own ? (await this.lanes.open({ kind: params.kind ?? "throwaway" })).lane : params.lane!;
     try {
       if (setup) await setup(lane);
+      const t0Act = performance.now();
       const result = await this.lanes.withLane(lane, (l) => this.traced(l.id, act(l, params.steps, { noErrorsByDefault: true })));
+      const traceId = this.trace.record("run.steps", lane, { name: params.name, steps: params.steps }, result, result.ok, Math.round(performance.now() - t0Act));
       const failedAt = result.steps.findIndex((s) => !s.ok);
       return {
         name: params.name,
@@ -103,7 +171,7 @@ export class Service {
         ...(result.ok ? {} : { failedAt: failedAt === -1 ? result.steps.length : failedAt }),
         steps: result.steps,
         ms: Math.round(performance.now() - t0),
-        trace: `${lane}-${Date.now()}`,
+        trace: traceId,
       };
     } finally {
       if (own) await this.lanes.close(lane).catch(() => {});

@@ -33,12 +33,14 @@ beforeAll(async () => {
       if (pathname === "/api/receipt") return new Response("down", { status: 500 });
       if (pathname === "/set-cookie") return new Response("<title>set</title>set", { headers: { "content-type": "text/html", "set-cookie": "who=lane-a; Path=/" } });
       if (pathname === "/echo-cookie") return new Response(`<title>echo</title><p>cookie:${req.headers.get("cookie") ?? "none"}</p>`, { headers: { "content-type": "text/html" } });
+      if (pathname === "/slow.png") return new Promise((resolve) => setTimeout(() => resolve(new Response(Bun.file(join(REPO, "docs/media/argus.svg")), { headers: { "content-type": "image/svg+xml" } })), 900));
+      if (pathname === "/gallery") return new Response('<title>Gallery</title><h1>Gallery</h1><img id="slow" alt="Slow" width="200" height="200" src="/slow.png">', { headers: { "content-type": "text/html" } });
       if (pathname === "/quiet") return new Response("<title>Quiet</title><h1>Quiet page</h1><button>Nothing</button>", { headers: { "content-type": "text/html" } });
       return new Response("not found", { status: 404 });
     },
   });
   base = `http://127.0.0.1:${pages.port}`;
-  service = new Service();
+  service = new Service({ traceDir: join(dir, "trace") });
   server = await serve(service, { socketPath, validateResults: true });
   client = await Client.connect(socketPath);
 }, 30_000);
@@ -240,6 +242,70 @@ describe("reach", () => {
       { press: "Enter" },
     ]);
     expect(r.steps.slice(0, 2).every((s: StepResult) => s.ok)).toBe(true);
+  }, 30_000);
+});
+
+describe("check and evidence", () => {
+  test("check reports the checkout's planted defects with standard rule ids, runtime included", async () => {
+    const lane = await openLane(`${base}/checkout`);
+    const r = await client.call<{ score: number; findings: Array<{ rule: string; category: string; examples: Array<{ detail?: { contrast?: number; selector?: string } }> }> }>("check", { lane });
+    const rules = r.findings.map((f) => f.rule);
+    for (const rule of ["contrast", "tap-target", "unnamed-control", "heading-order", "overflow-x", "tiny-text", "console-error"])
+      expect(rules).toContain(rule);
+    const muted = r.findings.find((f) => f.rule === "contrast")!.examples.find((e) => e.detail?.selector === "p.muted");
+    expect(muted?.detail?.contrast).toBeGreaterThan(2.0);
+    expect(muted?.detail?.contrast).toBeLessThan(2.2);
+    expect(r.score).toBeLessThan(70);
+    const runtime = await client.call<{ findings: Array<{ category: string }> }>("check", { lane, only: ["runtime"] });
+    expect(new Set(runtime.findings.map((f) => f.category))).toEqual(new Set(["runtime"]));
+    await client.call("lane.close", { lane });
+  }, 30_000);
+
+  test("check sees inside shadow roots, which in-page audits cannot", async () => {
+    const lane = await openLane(`${base}/reach`);
+    const r = await client.call<{ findings: Array<{ rule: string; examples: Array<{ text?: string }> }> }>("check", { lane, only: ["a11y"] });
+    const texts = r.findings.find((f) => f.rule === "contrast")?.examples.map((e) => e.text) ?? [];
+    expect(texts).toContain("Faint text inside a shadow root");
+    await client.call("lane.close", { lane });
+  }, 30_000);
+
+  test("look crops one element, even a covered one, and prices it", async () => {
+    const lane = await openLane(`${base}/checkout`);
+    const e = await client.call<{ image: string; w: number; h: number; tokens: number }>("evidence.look", { lane, target: "button:Place order" });
+    expect(await Bun.file(e.image).exists()).toBe(true);
+    expect(e.w).toBeLessThan(300);
+    expect(e.h).toBeLessThan(120);
+    expect(e.tokens).toBe(Math.ceil(e.w / 28) * Math.ceil(e.h / 28));
+    await client.call("lane.close", { lane });
+  }, 30_000);
+
+  test("a screenshot waits for the page's images instead of capturing broken ones", async () => {
+    const lane = (await client.call<{ lane: string }>("lane.open", { kind: "throwaway" })).lane;
+    // Navigate without waiting for load, so the slow image is still in flight.
+    const page = service.lanes.get(lane).page;
+    await page.send("Page.navigate", { url: `${base}/gallery` });
+    await Bun.sleep(150);
+    const t0 = performance.now();
+    const e = await client.call<{ w: number; h: number; tokens: number }>("evidence.shot", { lane });
+    expect(performance.now() - t0).toBeGreaterThan(500);
+    expect([e.w, e.h]).toEqual([1280, 800]);
+    expect(e.tokens).toBe(1334);
+    await client.call("lane.close", { lane });
+  }, 30_000);
+});
+
+describe("trace", () => {
+  test("every act is recorded and can be read back; a run's trace id resolves", async () => {
+    const lane = await openLane(`${base}/quiet`);
+    await act(lane, [{ click: "button:Nothing" }]);
+    const { entries } = await client.call<{ entries: Array<{ id: string; method: string; lane: string }> }>("trace.list", { lane, limit: 5 });
+    expect(entries[0]?.method).toBe("act");
+    const entry = await client.call<{ params: { steps: unknown[] }; result: { ok: boolean } }>("trace.get", { id: entries[0]!.id });
+    expect(entry.params.steps).toEqual([{ click: "button:Nothing" }]);
+    await client.call("lane.close", { lane });
+    const r = await client.call<{ trace: string }>("run", { name: "quiet", steps: [{ open: `${base}/quiet` }] });
+    const steps = await client.call<{ method: string }>("trace.get", { id: r.trace });
+    expect(steps.method).toBe("run.steps");
   }, 30_000);
 });
 

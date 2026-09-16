@@ -168,8 +168,11 @@ it.
 
 Argus is a preview. The `argus` command, desks, nests, the bar widget and the
 own-browser bridge work today and are tested on every change. `argusd` speaks
-Protocol v0 for browser lanes; checks, visual evidence, traces and native-app
-lanes are moving into it next. The protocol may change until v1.
+Protocol v0 for browser lanes: verified `act`, outlines, `check` (accessibility,
+layout, runtime), priced screenshots and crops, `run`, `sweep` and traces.
+Desk, own-browser and native-app lanes are moving into it next, then the
+`argus` command becomes a thin client of the daemon. The protocol may change
+until v1.
 
 ## Development
 
