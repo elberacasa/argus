@@ -159,17 +159,18 @@ Measured on the same machine, every call and token counted.
 **UI Testing Playground**, a third-party site built to break automation
 ([details](docs/benchmark-uitap.md)):
 
-| | Passed | Reported success for something that did not happen | Calls | Tokens |
+| | Passed | Reported success for something that did not happen | Tool calls | Total |
 |---|:---:|:---:|:---:|:---:|
-| **Argus** (argusd) | **10 / 10** | **0** | 31 | ~4,505 |
-| Argus prototype | 7 / 10 | 0 | 24 | ~4,500 + polling |
-| Claude in Chrome | 9 / 10 | 3 | ~29 | similar |
+| **Claude Opus 5 using Argus** (MCP) | **10 / 10** | **0** | 40 | 139 s · $0.53 |
+| Scripted agent using argusd | 10 / 10 | 0 | 31 | ~4,505 tokens |
+| Argus prototype | 7 / 10 | 0 | 24 | ~4,500 tokens + polling |
+| Claude in Chrome | 9 / 10 | 3 | ~29 | similar tokens |
 
 Every result is checked against the page itself, so a false success cannot hide.
-The argusd run plays the challenges with a scripted agent through the protocol,
-three runs in a row with identical results; reproduce it with
-`cd argusd && bun bench/uitap.ts`. The Claude in Chrome figures are from an
-earlier model-driven run and have not been rerun.
+In the model run, each challenge was a fresh headless Claude Code session with
+only Argus's tools and the page's scenario as its task; reproduce it with
+`cd argusd && bun bench/rematch.ts`. The Claude in Chrome figures are from an
+earlier model-driven session and have not been rerun on the same day.
 
 **Argus's own test pages** ([details](docs/benchmark.md)): ~1,880 tokens for
 Argus and ~5,540 for Claude in Chrome across the five tasks both attempted.

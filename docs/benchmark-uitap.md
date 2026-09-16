@@ -5,7 +5,42 @@ is a third-party site built to break browser automation, where every page
 states its own trap and what success means. The first benchmark
 (`docs/benchmark.md`) ran on pages written alongside Argus.
 
-## argusd: 10/10, zero false successes
+## A real model through Argus: 10/10, zero false successes
+
+Run on 2026-09-16 with `cd argusd && bun bench/rematch.ts`. Each challenge is a
+separate headless Claude Code session (`claude -p`, Claude Opus 5) whose only
+tools are Argus's MCP tools: built-in tools off, strict MCP config, no user
+settings. The model gets the page's scenario, not hints about how to solve it,
+and must end with `RESULT: success` or `RESULT: failure`. The harness hosts the
+daemon, installs a click recorder in every page before the page's own scripts
+run, and judges the goal from the page itself.
+
+| Challenge | Goal met (read from the page) | Model claimed | Tool calls | Time | Cost |
+|---|---|---|---:|---:|---:|
+| Hidden Layers | yes: green pressed once | success | 5 | 15.4 s | $0.074 |
+| Overlapped | yes: name = "Argus" | success | 4 | 12.0 s | $0.050 |
+| Visibility | yes: 7/7 judged not clickable | success | 7 | 16.1 s | $0.078 |
+| Click | yes: turned green | success | 3 | 11.7 s | $0.039 |
+| Text Input | yes: button reads "Argus" | success | 3 | 10.5 s | $0.042 |
+| Client Side Delay | yes: label clicked once | success | 3 | 24.4 s | $0.043 |
+| Non-Breaking Space | yes: clicked once | success | 3 | 12.2 s | $0.042 |
+| Scrollbars | yes: hidden button clicked once | success | 3 | 11.2 s | $0.043 |
+| Shadow DOM | yes: GUID generated and reported exactly | success | 4 | 11.0 s | $0.046 |
+| Frames | yes: inner Edit pressed, outer untouched | success | 5 | 14.3 s | $0.068 |
+
+**10/10 goals met, 0 false successes, 40 tool calls, 139 s, $0.53 in total.**
+Time includes starting each session; the tool calls include opening the page.
+
+From the transcripts: on Hidden Layers the second press came back
+`✗ click button:Button e0.57 · covered`, naming the blue button on top, and the
+model confirmed with a 12-image-token crop. On Overlapped the outline had
+already flagged the Name field as covered, so the model scrolled it clear
+before typing; Argus verified the field held "Argus".
+
+This is one run. The Claude in Chrome figures further down come from an earlier
+session driven through its own tools and were not rerun on the same day.
+
+## A scripted agent through argusd: 10/10, zero false successes
 
 Run on 2026-09-16 with `cd argusd && bun bench/uitap.ts`, three times in a row
 with identical results.
