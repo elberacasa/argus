@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Readable, Writable } from "node:stream";
 import type { ProtocolMapping } from "devtools-protocol/types/protocol-mapping";
+import type { CdpPage } from "./page";
 
 type Commands = ProtocolMapping.Commands;
 type Events = ProtocolMapping.Events;
@@ -249,7 +250,7 @@ export class Browser {
 }
 
 /** A page target, reached through a flattened session on the same pipe. */
-export class Page {
+export class Page implements CdpPage {
   private constructor(
     readonly browser: Browser,
     readonly targetId: string,
@@ -278,6 +279,13 @@ export class Page {
 
   send<M extends Method>(method: M, params?: Params<M>): Promise<Result<M>> {
     return this.browser.send(method, params, this.sessionId);
+  }
+
+  get alive(): boolean { return this.browser.alive; }
+
+  async info(): Promise<{ url: string; title: string }> {
+    const { targetInfo } = await this.browser.send("Target.getTargetInfo", { targetId: this.targetId });
+    return { url: targetInfo.url, title: targetInfo.title };
   }
 
   /** Events from this page's session only. */

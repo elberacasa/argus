@@ -11,7 +11,7 @@
 // 4.5:1 (3:1 for large text), targets 24x24 CSS px, text at least 12px.
 
 import type { Protocol } from "devtools-protocol";
-import type { Page } from "../cdp/pipe";
+import type { CdpPage as Page } from "../cdp/page";
 import type { Probe, Mark } from "../lane/probe";
 import type { Scene } from "../scene/snapshot";
 

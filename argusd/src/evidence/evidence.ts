@@ -11,7 +11,7 @@
 
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
-import type { Page } from "../cdp/pipe";
+import type { CdpPage as Page } from "../cdp/page";
 import type { Scene, SceneElement } from "../scene/snapshot";
 
 export interface Evidence { image: string; w: number; h: number; tokens: number }
@@ -57,7 +57,12 @@ async function capture(page: Page, lane: string, kind: string, clip?: { x: numbe
 }
 
 export async function shot(page: Page, lane: string, full = false): Promise<Evidence> {
-  if (!full) return capture(page, lane, "shot");
+  if (!full) {
+    // Always clipped to the viewport: an unclipped capture of a tab the browser
+    // is not painting (a background tab in the person's browser) can stall.
+    const { cssVisualViewport: vv } = await page.send("Page.getLayoutMetrics");
+    return capture(page, lane, "shot", { x: vv.pageX, y: vv.pageY, width: Math.round(vv.clientWidth), height: Math.round(vv.clientHeight) });
+  }
   const metrics = await page.send("Page.getLayoutMetrics");
   const { width, height } = metrics.cssContentSize;
   return capture(page, lane, "full", { x: 0, y: 0, width: Math.ceil(width), height: Math.min(Math.ceil(height), 16_000) }, true);
@@ -65,7 +70,7 @@ export async function shot(page: Page, lane: string, full = false): Promise<Evid
 
 /** A crop around one element, including covered or disabled ones: those are the ones worth seeing. */
 export async function look(page: Page, lane: string, scene: Scene, element: SceneElement | null, pad = 16): Promise<Evidence> {
-  if (!element?.bounds) return capture(page, lane, "look");
+  if (!element?.bounds) return shot(page, lane);
   const metrics = await page.send("Page.getLayoutMetrics");
   const { pageX, pageY } = metrics.cssVisualViewport;
   const b = element.bounds;

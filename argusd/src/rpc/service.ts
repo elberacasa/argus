@@ -90,7 +90,7 @@ export class Service {
         return {
           protocol: "0",
           server: { name: "argusd", version: VERSION, build: this.build },
-          capabilities: { lanes: this.lanes.kinds, eyes: true, decider: "none", check: CATEGORIES },
+          capabilities: { lanes: await this.lanes.kinds(), eyes: true, decider: "none", check: CATEGORIES },
         };
 
       case "lane.open":

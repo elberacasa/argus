@@ -7,8 +7,11 @@ native messaging framing: a 4-byte little-endian length, then JSON.
 
 argus reaches it over a Unix socket in $XDG_RUNTIME_DIR, created with mode 0600
 inside a 0700 directory, so only processes of the same user can connect -- the
-same trust boundary as the user running argus. One request per connection: a
-JSON line in, a JSON line out.
+same trust boundary as the user running argus. A connection carries JSON lines:
+a request without "rid" is answered in order (one request per connection still
+works); requests with "rid" are answered as they finish, tagged with it, so a
+client can send several at once. {"op":"subscribe"} turns a connection into a
+stream of the browser events the extension forwards for argus's own tabs.
 
 There is deliberately no TCP listener and no remote-debugging port anywhere.
 """
@@ -33,6 +36,8 @@ stdout_lock = threading.Lock()
 pending = {}                    # request id -> [threading.Event, response]
 pending_lock = threading.Lock()
 next_id = 0
+subscribers = set()             # connections streaming events
+subscribers_lock = threading.Lock()
 
 
 def send_to_extension(message):
@@ -43,8 +48,9 @@ def send_to_extension(message):
 
 
 def read_from_extension():
-    """Route responses to whichever socket client is waiting for that id. When
-    the browser closes the pipe the extension is gone, so the host goes too."""
+    """Route responses to whichever socket client is waiting for that id, and
+    events to every subscriber. When the browser closes the pipe the extension
+    is gone, so the host goes too."""
     stream = sys.stdin.buffer
     while True:
         header = stream.read(4)
@@ -56,6 +62,12 @@ def read_from_extension():
             message = json.loads(body)
         except ValueError:
             continue
+        if "event" in message:
+            with subscribers_lock:
+                targets = list(subscribers)
+            for connection in targets:
+                connection.reply({"event": message["event"]})
+            continue
         with pending_lock:
             slot = pending.get(message.get("id"))
         if slot:
@@ -65,42 +77,72 @@ def read_from_extension():
 
 
 class Relay(socketserver.StreamRequestHandler):
+    def setup(self):
+        super().setup()
+        self.write_lock = threading.Lock()
+        self.alive = True
+
     def handle(self):
-        global next_id
-        line = self.rfile.readline()
         try:
-            request = json.loads(line)
-            if not isinstance(request, dict) or "op" not in request:
-                raise ValueError("expected a JSON object with an op")
-        except ValueError as e:
-            self.reply({"ok": False, "error": f"bad request: {e}"})
-            return
+            for line in self.rfile:
+                if not line.strip():
+                    continue
+                try:
+                    request = json.loads(line)
+                    if not isinstance(request, dict) or "op" not in request:
+                        raise ValueError("expected a JSON object with an op")
+                except ValueError as e:
+                    self.reply({"ok": False, "error": f"bad request: {e}"})
+                    continue
+                if request["op"] == "subscribe":
+                    with subscribers_lock:
+                        subscribers.add(self)
+                    self.reply({"ok": True, "result": {"subscribed": True}})
+                    continue
+                if "rid" in request:
+                    threading.Thread(target=self.relay, args=(request,), daemon=True).start()
+                else:
+                    self.relay(request)
+        finally:
+            self.alive = False
+            with subscribers_lock:
+                subscribers.discard(self)
 
+    def relay(self, request):
+        global next_id
+        rid = request.pop("rid", None)
+        tag = {} if rid is None else {"rid": rid}
         if request["op"] == "host":
-            self.reply({"ok": True, "result": {"pid": os.getpid(), "socket": SOCK}})
+            self.reply({"ok": True, "result": {"pid": os.getpid(), "socket": SOCK}, **tag})
             return
-
         with pending_lock:
             next_id += 1
-            rid = next_id
-            slot = pending[rid] = [threading.Event(), None]
+            eid = next_id
+            slot = pending[eid] = [threading.Event(), None]
         try:
             # A caller may ask for a shorter wait: a screenshot of a tab that is
             # not being rendered can stall, and retrying beats waiting a minute.
             timeout = max(0.25, min(120.0, float(request.pop("timeout", TIMEOUT))))
-            send_to_extension({**request, "id": rid})
+            send_to_extension({**request, "id": eid})
             if not slot[0].wait(timeout):
-                self.reply({"ok": False, "error": f"extension did not answer within {timeout}s"})
+                self.reply({"ok": False, "error": f"extension did not answer within {timeout}s", **tag})
                 return
             response = slot[1]
             response.pop("id", None)
-            self.reply(response)
+            self.reply({**response, **tag})
         finally:
             with pending_lock:
-                pending.pop(rid, None)
+                pending.pop(eid, None)
 
     def reply(self, obj):
-        self.wfile.write(json.dumps(obj, separators=(",", ":")).encode() + b"\n")
+        if not self.alive:
+            return
+        try:
+            with self.write_lock:
+                self.wfile.write(json.dumps(obj, separators=(",", ":")).encode() + b"\n")
+                self.wfile.flush()
+        except OSError:
+            self.alive = False
 
 
 class Server(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):

@@ -18,7 +18,7 @@ import { renderAct, renderCheck, renderFind, renderObservation, renderRun, rende
 
 const USAGE = `argus -- drive browsers and be told the truth about what happened.
 
-usage: argus [--lane NAME] [--desk] [--json] [--expect JSON] <command>
+usage: argus [--lane NAME] [--desk | --own] [--json] [--expect JSON] <command>
 
   open <url>                    load a page; prints what loaded and an outline
   click <target> [nth]          click with a real pointer, or say why it cannot
@@ -50,7 +50,8 @@ usage: argus [--lane NAME] [--desk] [--json] [--expect JSON] <command>
 A target is role:name ("button:Sign in"), a ref from an outline ("e0.57"),
 text:... for plain text, or JSON ({"role":"button","name":"Save","nth":2}).
 Lanes are named; the default is "main" (or $ARGUS_LANE). With --desk, open
-starts the lane as a real window on the desk, a monitor only agents use.
+starts the lane as a real window on the desk, a monitor only agents use; with
+--own, as a tab in your own Chromium, with your logins (argus own install).
 
 Desks, your own browser, nests and the bar: argus desk|peek|own|nest|bar ...
 `;
@@ -75,14 +76,14 @@ function parseJsonArg(raw: string | undefined, what: string): unknown {
 
 class UsageError extends Error {}
 
-interface Options { lane: string; json: boolean; expect?: unknown; desk: boolean }
+interface Options { lane: string; json: boolean; expect?: unknown; desk: boolean; own: boolean }
 
-async function laneId(c: Client, label: string, openUrl?: string, desk = false): Promise<{ id: string; opened?: Record<string, unknown> } | null> {
+async function laneId(c: Client, label: string, openUrl?: string, kind: "throwaway" | "desk" | "own" = "throwaway"): Promise<{ id: string; opened?: Record<string, unknown> } | null> {
   const { lanes } = await c.call<{ lanes: Array<{ lane: string; label: string }> }>("lane.list");
   const found = lanes.find((l) => l.label === label);
   if (found) return { id: found.lane };
   if (!openUrl) return null;
-  const opened = await c.call<Record<string, unknown>>("lane.open", { kind: desk ? "desk" : "throwaway", label, url: openUrl });
+  const opened = await c.call<Record<string, unknown>>("lane.open", { kind, label, url: openUrl });
   return { id: opened.lane as string, opened };
 }
 
@@ -104,13 +105,14 @@ function print(o: Options, result: unknown, text: () => string): void {
 }
 
 export async function cli(argv: string[]): Promise<number> {
-  const o: Options = { lane: process.env.ARGUS_LANE || "main", json: false, desk: false };
+  const o: Options = { lane: process.env.ARGUS_LANE || "main", json: false, desk: false, own: false };
   const args: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
     if (a === "--lane") o.lane = argv[++i] ?? o.lane;
     else if (a === "--json") o.json = true;
     else if (a === "--desk") o.desk = true;
+    else if (a === "--own") o.own = true;
     else if (a === "--expect") o.expect = JSON.parse(argv[++i] ?? "{}");
     else if (a === "-h" || a === "--help" || a === "help") { console.log(USAGE); return 0; }
     else args.push(a);
@@ -142,10 +144,10 @@ async function dispatch(c: Client, o: Options, command: string, args: string[]):
     case "open": {
       need(1, "open <url>");
       const url = args[0]!;
-      const found = await laneId(c, o.lane, url, o.desk);
+      const found = await laneId(c, o.lane, url, o.own ? "own" : o.desk ? "desk" : "throwaway");
       if (found!.opened) {
         const { outline } = await c.call<{ outline: string }>("scene.outline", { lane: found!.id });
-        print(o, found!.opened, () => [`lane ${o.lane} opened${o.desk ? " on the desk" : ""}`, ...renderObservation((found!.opened!.observation ?? {}) as never), "", outline].join("\n"));
+        print(o, found!.opened, () => [`lane ${o.lane} opened${o.own ? " in your browser" : o.desk ? " on the desk" : ""}`, ...renderObservation((found!.opened!.observation ?? {}) as never), "", outline].join("\n"));
         return 0;
       }
       const r = await c.call<ActResult>("act", { lane: found!.id, steps: [o.expect ? { open: url, expect: o.expect } : { open: url }] });

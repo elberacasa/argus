@@ -6,7 +6,7 @@
 // in an isolated world counts mutations: invisible to the page's own scripts,
 // installed before any of them run, and read only to tell quiet from busy.
 
-import type { Page } from "../cdp/pipe";
+import type { CdpPage as Page } from "../cdp/page";
 import type { Observation } from "../protocol/types";
 
 const MUTATION_WORLD = "argus";

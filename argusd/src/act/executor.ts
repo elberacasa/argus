@@ -7,7 +7,7 @@
 // surprise and says why. A step that reports ok has an effect or an
 // expectation that held; "nothing happened" is reported, not dressed up.
 
-import type { Page } from "../cdp/pipe";
+import type { CdpPage as Page } from "../cdp/page";
 import type { Probe, Mark } from "../lane/probe";
 import type {
   ActResult, Diagnosis, Element, ElementStateName, Expectation, FailedCondition, Observation, Step, StepResult, Target, Verb,

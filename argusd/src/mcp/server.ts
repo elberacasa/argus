@@ -36,7 +36,7 @@ const steps = {
 
 const TOOLS = [
   { name: "browser_open", description: "Open a URL in a lane and return what loaded plus an outline of the page (landmarks, headings, fields, actions with refs, and which actions are covered or disabled). Start here.",
-    inputSchema: { type: "object", properties: { url: { type: "string" }, lane, desk: { type: "boolean", description: "Open the lane as a real, headful window on the desk (a monitor only agents use, watched from the Omarchy bar) instead of a headless browser. Only when the lane is first opened." }, viewport: { type: "object", description: "{w, h}; widths under 600 emulate a phone", properties: { w: { type: "integer" }, h: { type: "integer" } } } }, required: ["url"] } },
+    inputSchema: { type: "object", properties: { url: { type: "string" }, lane, own: { type: "boolean", description: "Open the lane as a tab in the person's own Chromium, with their logins, through the Argus extension. It only ever touches tabs it opened. Ask the person before acting on their accounts." }, desk: { type: "boolean", description: "Open the lane as a real, headful window on the desk (a monitor only agents use, watched from the Omarchy bar) instead of a headless browser. Only when the lane is first opened." }, viewport: { type: "object", description: "{w, h}; widths under 600 emulate a phone", properties: { w: { type: "integer" }, h: { type: "integer" } } } }, required: ["url"] } },
   { name: "browser_act", description: "Run a script of steps in one call, each verified; stops at the first step that fails and says why (covered, disabled, hidden, ambiguous, not-found with near matches, expectation-failed, timeout). Prefer this to single clicks when you know the next few steps.",
     inputSchema: { type: "object", properties: { steps, lane }, required: ["steps"] } },
   { name: "browser_click", description: "Click one element with a real pointer. Returns what changed. If it cannot land (covered, disabled, hidden, offscreen) it does not click, and names the reason and the blocker.",
@@ -91,14 +91,14 @@ export class McpServer {
   }
 
   /** The daemon lane id for a lane name, opening it if asked to. */
-  private async laneId(name: string | undefined, open?: { url: string; viewport?: { w: number; h: number }; desk?: boolean }): Promise<{ id: string; opened?: Record<string, unknown> } | null> {
+  private async laneId(name: string | undefined, open?: { url: string; viewport?: { w: number; h: number }; desk?: boolean; own?: boolean }): Promise<{ id: string; opened?: Record<string, unknown> } | null> {
     const label = name || "main";
     const c = await this.daemon();
     const { lanes } = await c.call<{ lanes: Array<{ lane: string; label: string }> }>("lane.list");
     const existing = lanes.find((l) => l.label === label);
     if (existing) return { id: existing.lane };
     if (!open) return null;
-    const opened = await c.call<Record<string, unknown>>("lane.open", { kind: open.desk ? "desk" : "throwaway", url: open.url, label, ...(open.viewport ? { viewport: open.viewport } : {}) });
+    const opened = await c.call<Record<string, unknown>>("lane.open", { kind: open.own ? "own" : open.desk ? "desk" : "throwaway", url: open.url, label, ...(open.viewport ? { viewport: open.viewport } : {}) });
     return { id: opened.lane as string, opened };
   }
 
@@ -118,11 +118,11 @@ export class McpServer {
     switch (name) {
       case "browser_open": {
         const viewport = args.viewport as { w: number; h: number } | undefined;
-        const found = await this.laneId(args.lane as string | undefined, { url: args.url as string, ...(viewport ? { viewport } : {}), ...(args.desk ? { desk: true } : {}) });
+        const found = await this.laneId(args.lane as string | undefined, { url: args.url as string, ...(viewport ? { viewport } : {}), ...(args.desk ? { desk: true } : {}), ...(args.own ? { own: true } : {}) });
         const c = await this.daemon();
         let head: string[];
         if (found!.opened) {
-          head = [`lane ${(args.lane as string) || "main"} opened${args.desk ? " on the desk" : ""}`, ...renderObservation((found!.opened.observation ?? {}) as never)];
+          head = [`lane ${(args.lane as string) || "main"} opened${args.own ? " in your browser" : args.desk ? " on the desk" : ""}`, ...renderObservation((found!.opened.observation ?? {}) as never)];
         } else {
           const steps: unknown[] = [];
           if (viewport) steps.push({ viewport });

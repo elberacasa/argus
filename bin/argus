@@ -13,7 +13,7 @@ ROOT=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)
 legacy=false
 for a in "$@"; do
   case $a in
-    --own|--see|--no-trace) legacy=true ;;
+    --see|--no-trace) legacy=true ;;
   esac
 done
 # The first word that is not an option (or an option's value) is the command.

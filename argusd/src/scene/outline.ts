@@ -5,7 +5,7 @@
 // more. What does not fit the budget is counted, never silently dropped.
 // Actions are hit-tested, so a covered button says so in the outline itself.
 
-import type { Page } from "../cdp/pipe";
+import type { CdpPage as Page } from "../cdp/page";
 import { hitTest, type Scene, type SceneElement } from "./snapshot";
 
 const LANDMARKS = new Set(["main", "navigation", "banner", "contentinfo", "complementary", "form", "dialog", "alertdialog", "search", "region"]);

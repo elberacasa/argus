@@ -12,8 +12,11 @@ import { act, setViewport, type LaneContext } from "../act/executor";
 import { RpcError, ErrorCode, type LaneKind, type Viewport } from "../protocol/types";
 import { Probe, type Mark } from "./probe";
 import { DESK_BROWSER_ARGS, deskAvailable, ensureDesk } from "./desk";
+import { Bridge, OwnPage } from "./own";
+import type { CdpPage } from "../cdp/page";
 
 export interface Lane extends LaneContext {
+  page: CdpPage;
   id: string;
   kind: LaneKind;
   label?: string;
@@ -43,7 +46,36 @@ export class Lanes {
     private readonly events: Partial<LaneEvents> = {},
   ) {}
 
-  get kinds(): LaneKind[] { return deskAvailable() ? ["throwaway", "desk"] : ["throwaway"]; }
+  private bridge: Bridge | null = null;
+  private bridging: Promise<Bridge> | null = null;
+
+  /** Lane kinds this machine can serve right now. `own` only while a browser is bridged. */
+  async kinds(): Promise<LaneKind[]> {
+    const kinds: LaneKind[] = ["throwaway"];
+    if (deskAvailable()) kinds.push("desk");
+    try { await this.ensureBridge(); kinds.push("own"); } catch { /* no bridged browser */ }
+    return kinds;
+  }
+
+  private async ensureBridge(): Promise<Bridge> {
+    if (this.bridge?.connected) return this.bridge;
+    if (!this.bridging) {
+      this.bridging = Bridge.connect().then((bridge) => {
+        this.bridge = bridge;
+        bridge.onLost(() => {
+          if (this.bridge !== bridge) return;
+          this.bridge = null;
+          for (const lane of [...this.lanes.values()]) {
+            if (lane.kind !== "own") continue;
+            this.lanes.delete(lane.id);
+            this.events.lane?.({ lane: lane.id, change: "lost" });
+          }
+        });
+        return bridge;
+      }).finally(() => { this.bridging = null; });
+    }
+    return this.bridging;
+  }
 
   private async ensureBrowser(kind: BrowserKind): Promise<Browser> {
     const existing = this.browsers.get(kind);
@@ -83,23 +115,36 @@ export class Lanes {
   async open(params: { kind: LaneKind; url?: string; viewport?: Viewport; label?: string }) {
     if (params.kind === "desk" && !deskAvailable())
       throw new RpcError(ErrorCode.capabilityMissing, "desk lanes need a Hyprland session; this daemon has none");
-    if (params.kind !== "throwaway" && params.kind !== "desk")
+    if (params.kind !== "throwaway" && params.kind !== "desk" && params.kind !== "own")
       throw new RpcError(ErrorCode.capabilityMissing, `lane kind "${params.kind}" is not available in argusd yet`);
-    let browser: Browser;
-    try {
-      browser = await this.ensureBrowser(params.kind);
-    } catch (error) {
-      throw new RpcError(ErrorCode.capabilityMissing, `could not start a ${params.kind} browser: ${error instanceof Error ? error.message : String(error)}`);
+    const id = `l${this.next++}`;
+    let page: CdpPage;
+    if (params.kind === "own") {
+      let bridge: Bridge;
+      try {
+        bridge = await this.ensureBridge();
+      } catch (error) {
+        throw new RpcError(ErrorCode.capabilityMissing, `own lanes need your Chromium with the Argus extension (argus own install, then restart Chromium): ${error instanceof Error ? error.message : String(error)}`);
+      }
+      // A key of argusd's own, so it can never collide with a lane the legacy
+      // command line opened in the same browser.
+      page = await OwnPage.open(bridge, `argusd-${id}`);
+    } else {
+      let browser: Browser;
+      try {
+        browser = await this.ensureBrowser(params.kind);
+      } catch (error) {
+        throw new RpcError(ErrorCode.capabilityMissing, `could not start a ${params.kind} browser: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      page = await Page.open(browser, { isolated: true, newWindow: params.kind === "desk" });
+      if (params.kind === "desk") await this.closeStartupWindow(browser);
     }
-    const desk = params.kind === "desk";
-    const page = await Page.open(browser, { isolated: true, newWindow: desk });
-    if (desk) await this.closeStartupWindow(browser);
+    const desk = params.kind !== "throwaway";
     const probe = await Probe.attach(page);
-    // A desk window is a real window: its size is the viewport, set by the desk
-    // rule. Emulation is applied only when asked for.
+    // A desk window or a tab in the person's browser is a real window: its size
+    // is the viewport. Emulation is applied only when asked for.
     const viewport = params.viewport ?? DEFAULT_VIEWPORT;
     if (!desk || params.viewport) await setViewport(page, viewport);
-    const id = `l${this.next++}`;
     const lane: Lane = {
       id, kind: params.kind, page, probe,
       defaultViewport: desk && !params.viewport ? null : { w: viewport.w, h: viewport.h },
@@ -151,7 +196,7 @@ export class Lanes {
     try {
       return await work(lane);
     } catch (error) {
-      if (!lane.page.browser.alive) throw new RpcError(ErrorCode.browserLost, `the browser behind lane ${id} exited`);
+      if (!lane.page.alive) throw new RpcError(ErrorCode.browserLost, `the browser behind lane ${id} exited`);
       throw error;
     } finally {
       lane.busy = false;
@@ -163,6 +208,11 @@ export class Lanes {
     this.lanes.delete(id);
     const kind = lane.kind as BrowserKind;
     const last = kind === "desk" && ![...this.lanes.values()].some((l) => l.kind === "desk");
+    if (lane.kind === "own") {
+      await lane.page.close();
+      this.events.lane?.({ lane: id, change: "closed" });
+      return { closed: true };
+    }
     if (last) {
       // A headful Chromium quits when its last window closes; end it on our
       // terms instead, so the next desk lane starts a fresh one cleanly.
@@ -181,9 +231,7 @@ export class Lanes {
     for (const lane of this.lanes.values()) {
       let url = "", title = "";
       try {
-        const info = await lane.page.browser.send("Target.getTargetInfo", { targetId: lane.page.targetId });
-        url = info.targetInfo.url;
-        title = info.targetInfo.title;
+        ({ url, title } = await lane.page.info());
       } catch { /* closing */ }
       lanes.push({ lane: lane.id, kind: lane.kind, url, title, label: lane.label ?? "", busy: lane.busy, opened: lane.opened });
     }
@@ -192,6 +240,8 @@ export class Lanes {
 
   async shutdown(): Promise<void> {
     for (const id of [...this.lanes.keys()]) await this.close(id).catch(() => {});
+    this.bridge?.close();
+    this.bridge = null;
     for (const [kind, browser] of [...this.browsers]) {
       this.browsers.delete(kind);
       await browser.close();

@@ -18,6 +18,26 @@ const GROUP = { title: "Argus", color: "cyan" };
 const PROTOCOL = "1.3";
 
 let port = null;
+
+// Browser events argus needs to observe what an action did, forwarded only for
+// tabs this extension opened. Anything else the debugger reports stays here.
+const FORWARDED = new Set([
+  "Runtime.consoleAPICalled", "Runtime.exceptionThrown", "Runtime.executionContextCreated", "Runtime.executionContextsCleared",
+  "Log.entryAdded", "Page.loadEventFired", "Page.frameStartedLoading", "Page.javascriptDialogOpening", "Page.lifecycleEvent",
+  "Network.requestWillBeSent", "Network.responseReceived", "Network.loadingFinished", "Network.loadingFailed",
+]);
+
+function laneOf(tabId) {
+  for (const [lane, id] of lanes) if (id === tabId) return lane;
+  return null;
+}
+
+chrome.debugger.onEvent.addListener((source, method, params) => {
+  if (!port || !FORWARDED.has(method)) return;
+  const lane = laneOf(source.tabId);
+  if (lane === null) return;
+  port.postMessage({ event: { lane, method, params } });
+});
 const lanes = new Map();      // lane -> tabId, for tabs this extension created
 const attached = new Set();   // tabIds with the debugger attached
 
@@ -44,6 +64,8 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 // stop, so the lane is released rather than re-attached on the next command.
 chrome.debugger.onDetach.addListener(({ tabId }, reason) => {
   attached.delete(tabId);
+  const lane = laneOf(tabId);
+  if (lane !== null) port?.postMessage({ event: { lane, method: "Argus.detached", params: { reason } } });
   if (reason === "canceled_by_user") {
     for (const [lane, id] of lanes) if (id === tabId) lanes.delete(lane);
     persist();

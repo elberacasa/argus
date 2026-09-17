@@ -330,7 +330,7 @@ if [[ ${ARGUS_TEST_OWN:-0} == 1 ]]; then
   real_before=$(ARGUS_BRIDGE_SOCK= ./bin/argus own status 2>/dev/null | grep -c 'connected     yes')
   if ./test/throwaway-browser.sh start >/dev/null 2>&1; then
     ok "the extension connects through its native host"
-    O="$ARGUS --own --lane 40"
+    O="$ARGUS --own --lane 40"  # legacy own lanes (ARGUS is argus-legacy here)
     BASE=http://127.0.0.1:8765/test
     if ! curl -sf -o /dev/null "$BASE/fixture.html"; then
       bad "own-browser tests need the page server" "run: python3 -m http.server 8765 --bind 127.0.0.1"

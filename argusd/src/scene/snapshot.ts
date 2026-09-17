@@ -14,7 +14,7 @@
 // the one under the pointer). Always hit-test through hitTest().
 
 import type { Protocol } from "devtools-protocol";
-import type { Page } from "../cdp/pipe";
+import type { CdpPage as Page } from "../cdp/page";
 
 export interface Rect { x: number; y: number; w: number; h: number }
 
