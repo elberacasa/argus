@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { tmpdir } from "node:os";
 import { Service } from "../src/rpc/service";
 import type { ActResult } from "../src/protocol/types";
-import { MARKERS, orderTotal, startWorkbench, type Workbench } from "../bench/workbench/app";
+import { AVATAR_PATH, AVATAR_SHA, MARKERS, orderTotal, startWorkbench, type Workbench } from "../bench/workbench/app";
 
 let wb: Workbench;
 let service: Service;
@@ -190,6 +190,35 @@ describe("scrolling from inside a list", () => {
     expect(r.ok).toBe(false);
     expect(r.steps[0]!.diagnosis!.hint).toContain("not a <select>");
     expect(r.steps[0]!.diagnosis!.hint).toContain("scroll");
+    await service.call("lane.close", { lane });
+  }, 30_000);
+});
+
+describe("naming what a developer sees", () => {
+  test("a CSS selector is a target", async () => {
+    const lane = await open(`${wb.base}/avatar`);
+    const found = await service.call("scene.find", { lane, target: "input[type=file]" }) as { matches: Array<{ role: string }> };
+    expect(found.matches[0]?.role).toBe("file");
+    const byId = await service.call("scene.find", { lane, target: "#upload" }) as { matches: Array<{ name: string }> };
+    expect(byId.matches[0]?.name).toBe("Upload");
+    await service.call("lane.close", { lane });
+  }, 30_000);
+
+  test("uploading to the label of a styled picker reaches the input it names", async () => {
+    const lane = await open(`${wb.base}/avatar`);
+    const r = await act(lane, [
+      { upload: ["label:Choose image", AVATAR_PATH] },
+      { click: "button:Upload", expect: { appears: "Profile picture updated." } },
+    ]);
+    expect(r.ok).toBe(true);
+    await Bun.sleep(300);
+    expect(wb.state.avatarSha).toBe(AVATAR_SHA);
+    await service.call("lane.close", { lane });
+  }, 30_000);
+
+  test("a field that is there but invisible is listed, not hidden from the outline", async () => {
+    const lane = await open(`${wb.base}/avatar`);
+    expect(await outlineOf(lane)).toMatch(/file:Choose image e\d+\.\d+ \[transparent/);
     await service.call("lane.close", { lane });
   }, 30_000);
 });

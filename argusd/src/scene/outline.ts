@@ -15,7 +15,7 @@ const ACTIONS = new Set(["button", "link", "menuitem", "tab", "option"]);
 export async function outline(page: Page, scene: Scene, budget = 250): Promise<{ outline: string; tokens: number }> {
   // A checkbox or radio made transparent so a styled box can stand in for it
   // is still the control a person uses: list it, and say how to reach it.
-  const transparent = (e: SceneElement) => e.hiddenBy === "opacity" && (e.role === "checkbox" || e.role === "radio") && !!e.bounds;
+  const transparent = (e: SceneElement) => (e.hiddenBy === "opacity" || e.hiddenBy === "zero-size") && FIELDS.has(e.role) && !!e.bounds;
   const visible = scene.elements.filter((e) => e.visible || transparent(e));
   const inView = (e: SceneElement) => !!e.bounds && e.bounds.y < scene.viewport.h && e.bounds.y + e.bounds.h > 0;
 

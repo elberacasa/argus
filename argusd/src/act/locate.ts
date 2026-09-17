@@ -15,6 +15,14 @@ export type Located =
   | { ok: false; diagnosis: Diagnosis };
 
 const REF = /^e\d+\.(\d+)$/;
+/** Looks like a CSS selector rather than a role or a phrase: #id, .class, tag[attr], tag > tag. */
+const SELECTOR = /^[a-z]*(#[\w-]|\.[\w-]|\[[\w-]+|:[a-z-]+\()|^[a-z]+\s*[>+~]\s*[a-z*#.\[]/i;
+
+/** The CSS selector in a target, when that is what it is. */
+export function selectorOf(target: Target): string | null {
+  const t = parseTarget(target);
+  return t.role !== undefined && t.name === undefined && t.text === undefined && SELECTOR.test(t.role) ? t.role : null;
+}
 
 /** What an agent sees of an element: no internal fields. */
 export function publicElement(e: SceneElement, extra: Partial<Element> = {}): Element {

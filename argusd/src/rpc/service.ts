@@ -1,7 +1,7 @@
 // The protocol's methods, over lanes. Transport-free: the socket server feeds
 // it parsed requests, and tests can call it directly.
 
-import { act } from "../act/executor";
+import { act, locateOn } from "../act/executor";
 import { locate, publicElement } from "../act/locate";
 import { Lanes } from "../lane/lanes";
 import { ErrorCode, RpcError, type ActResult, type LaneKind, type Step, type Target, type Viewport } from "../protocol/types";
@@ -107,7 +107,7 @@ export class Service {
       case "scene.find":
         return this.lanes.withLane(params.lane as string, async (lane) => {
           const scene = await captureScene(lane.page);
-          const found = locate(scene, params.target as Target);
+          const found = await locateOn(lane.page, scene, params.target as Target);
           if (found.ok) return { matches: [publicElement(found.element)], match: found.match };
           if (found.diagnosis.reason === "ambiguous")
             return { matches: (found.diagnosis.candidates ?? []).slice(0, (params.limit as number | undefined) ?? 8), match: "exact" };

@@ -13,7 +13,7 @@ import type {
   ActResult, Diagnosis, Element, ElementStateName, Expectation, FailedCondition, Observation, Step, StepResult, Target, TargetObject, Verb,
 } from "../protocol/types";
 import { captureScene, hitTest, type Scene, type SceneElement } from "../scene/snapshot";
-import { describeTarget, label, locate, publicElement, type Match } from "./locate";
+import { describeTarget, label, locate, publicElement, selectorOf, type Match } from "./locate";
 
 export interface LaneContext {
   page: Page;
@@ -274,10 +274,27 @@ async function perform(lane: LaneContext, step: Step, verb: Verb, scene: Scene):
 
     case "upload": {
       const [target, ...files] = (step as { upload: [Target, ...string[]] }).upload;
-      const found = locate(scene, target);
+      const found = await locateOn(page, scene, target);
       if (!found.ok) return { ok: false, expectsEffect: false, diagnosis: found.diagnosis };
-      await page.send("DOM.setFileInputFiles", { files, backendNodeId: found.element.backendNodeId });
-      const count = await callOn(page, found.element.backendNodeId, "function () { return this.files ? this.files.length : -1 }");
+      // A styled picker is a label over an invisible input: an agent names what
+      // it can see, and the file goes to the input that label is for.
+      let node = found.element.backendNodeId;
+      if (found.element.role !== "file") {
+        const input = await callOn(page, node, `function () {
+          const own = this.matches && this.matches("input[type=file]") ? this : null;
+          const el = own || this.querySelector?.("input[type=file]") || (this.control && this.control.type === "file" ? this.control : null)
+            || (this.htmlFor ? document.getElementById(this.htmlFor) : null) || this.closest?.("label")?.querySelector?.("input[type=file]");
+          return el && el.type === "file" ? (el.id ||= "argus-file-" + Math.random().toString(36).slice(2)) : null;
+        }`) as string | null;
+        if (input) {
+          const better = (await captureScene(page)).elements.find((e) => e.selector.includes(`#${input}`));
+          if (better) node = better.backendNodeId;
+        }
+      }
+      await page.send("DOM.setFileInputFiles", { files, backendNodeId: node }).catch(async (error) => {
+        throw new Error(`${label(found.element)} is not a file input${found.element.role === "label" ? " and names none" : ""}. ${error instanceof Error ? error.message : String(error)}`);
+      });
+      const count = await callOn(page, node, "function () { return this.files ? this.files.length : -1 }");
       if (count !== files.length)
         return {
           ok: false, target: found.element, match: found.match, expectsEffect: false,
@@ -393,9 +410,45 @@ type Reached =
  * Where a person's click would land, and whether it would land on the element.
  * Offscreen elements are scrolled to first, as a person would.
  */
+/**
+ * A target the page can answer for: "input[type=file]", "#save", ".row > button".
+ * Developers name elements this way, and an agent reading a page's source will
+ * too, so the page is asked rather than the answer guessed from the outline.
+ */
+export async function findBySelector(page: Page, scene: Scene, selector: string): Promise<SceneElement[]> {
+  try {
+    const { root } = await page.send("DOM.getDocument", {});
+    const { nodeIds } = await page.send("DOM.querySelectorAll", { nodeId: root.nodeId, selector });
+    const out: SceneElement[] = [];
+    for (const nodeId of nodeIds.slice(0, 20)) {
+      const { node } = await page.send("DOM.describeNode", { nodeId });
+      const found = node.backendNodeId !== undefined ? scene.describe(node.backendNodeId) : null;
+      if (found) out.push(found);
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+/** Locate, asking the page when the target is a CSS selector. */
+export async function locateOn(page: Page, scene: Scene, target: Target): Promise<ReturnType<typeof locate>> {
+  const selector = selectorOf(target);
+  if (selector) {
+    const hits = await findBySelector(page, scene, selector);
+    if (hits.length === 1) return { ok: true, element: hits[0]!, match: "exact" };
+    if (hits.length > 1) {
+      const visible = hits.filter((e) => e.visible);
+      if (visible.length === 1) return { ok: true, element: visible[0]!, match: "exact" };
+      return { ok: false, diagnosis: { reason: "ambiguous", hint: `${hits.length} elements match ${selector}; pass one of their refs or nth.`, candidates: hits.slice(0, 8).map((e) => publicElement(e)) } };
+    }
+  }
+  return locate(scene, target);
+}
+
 export async function reach(lane: LaneContext, scene: Scene, target: Target, needsEnabled: boolean, points = false): Promise<Reached> {
   if (points && typeof target === "object" && target.x !== undefined) return reachPoint(lane, scene, target);
-  const found = locate(scene, target);
+  const found = await locateOn(lane.page, scene, target);
   if (!found.ok) return found;
   let element = found.element;
 

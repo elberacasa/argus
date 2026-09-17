@@ -169,11 +169,23 @@ export class McpServer {
           const { entries } = await c.call<{ entries: Array<{ id: string; method: string; ok: boolean; ms: number; at: string }> }>("trace.list", { lane: l.id, limit: (args.limit as number) ?? 20 });
           return text(entries.map((e) => `${e.at.slice(11, 19)} ${e.ok ? "✓" : "✗"} ${e.method} ${e.ms}ms ${e.id}`).join("\n") || "(nothing yet)");
         }
-        const e = name === "browser_look"
-          ? await c.call<{ image: string; w: number; h: number; tokens: number; origin?: { x: number; y: number } }>("evidence.look", { lane: l.id, ...(args.target !== undefined ? { target: args.target } : {}) })
-          : await c.call<{ image: string; w: number; h: number; tokens: number; origin?: { x: number; y: number } }>("evidence.shot", { lane: l.id, ...(args.full ? { full: true } : {}) });
-        const where = e.origin ? ` at (${e.origin.x}, ${e.origin.y}) in the viewport; image pixel (px, py) is viewport point (${e.origin.x}+px, ${e.origin.y}+py)` : "";
-        return this.image(e.image, `${e.w}x${e.h}${where}, ${e.tokens} image tokens`);
+        // A tab the browser is not painting cannot be pictured; the page can
+        // still be read, so the call answers with the page instead of nothing.
+        type Shot = { image: string; w: number; h: number; tokens: number; origin?: { x: number; y: number } };
+        const picture = async () => {
+          const e = name === "browser_look"
+            ? await c.call<Shot>("evidence.look", { lane: l.id, ...(args.target !== undefined ? { target: args.target } : {}) })
+            : await c.call<Shot>("evidence.shot", { lane: l.id, ...(args.full ? { full: true } : {}) });
+          const where = e.origin ? ` at (${e.origin.x}, ${e.origin.y}) in the viewport; image pixel (px, py) is viewport point (${e.origin.x}+px, ${e.origin.y}+py)` : "";
+          return this.image(e.image, `${e.w}x${e.h}${where}, ${e.tokens} image tokens`);
+        };
+        try {
+          return await picture();
+        } catch (error) {
+          const detail = error instanceof ArgusError ? error.message : error instanceof Error ? error.message : String(error);
+          const { outline } = await c.call<{ outline: string }>("scene.outline", { lane: l.id });
+          return text(`no picture: ${detail}\n\nthe page as text instead:\n${outline}`, true);
+        }
       }
 
       case "browser_run": return text(renderRun(await (await this.daemon()).call("run", { name: args.name, steps: args.steps })));
