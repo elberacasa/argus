@@ -5,7 +5,8 @@
 # Argus
 
 ### Computer use for Omarchy.
-Agents see the screen, act on it, and are told the truth about what happened.<br>
+Give every agent its own screen, browser and mouse. They work on a desk you watch from the bar —<br>
+your cursor, your windows and your focus are never touched.<br>
 Every step is verified against the page, every failure has a reason, and the evidence is published.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-3ccbb8?style=flat-square)](LICENSE)
@@ -44,7 +45,7 @@ every failure has a reason from a fixed set.
 
 <img src="docs/media/diagnosis.svg" alt="A blocked click reported as covered by div#scrim, then recovered: cookies accepted, order placed, failed receipt request reported" width="100%">
 
-### 2. Agents get their own screens
+### 2. Every agent gets its own machine
 
 Browsers and apps run on an **invisible desk**, a monitor that exists only for
 agents and sits where no cursor can reach. Your focus, cursor and workspace are
@@ -53,7 +54,9 @@ click to peek or stop.
 
 When an app needs a real mouse, a **nest** gives the agent a whole nested
 Hyprland with a pointer and keyboard of its own. It reads the app through its
-accessibility tree and verifies every step there.
+accessibility tree and verifies every step there. Nothing an agent does can
+move your pointer, steal your keyboard or raise a window in front of you: it
+has its own.
 
 <img src="docs/media/nest.svg" alt="A native GTK app driven inside a nest, beside the accessibility tree the agent reads" width="100%">
 
