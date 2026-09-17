@@ -47,17 +47,20 @@ every goal right and neither claims a success that did not happen. Argus does
 it in less than half the time, tokens and cost: 2.5× faster in total, 2.1×
 faster in the median run, 2.2× cheaper.
 
-**Where the difference comes from, from the transcripts.** On Client Side Delay,
-Argus's session made one call that clicked, waited for the label to appear and
-clicked it (`{"wait": {"appears": "Data calculated on the client side."}}`).
-Claude in Chrome's round-2 session clicked by coordinates, took three
-screenshots while the page worked, ran `find`, ran JavaScript to locate the
-label, clicked, and ran JavaScript again to confirm what was under the click:
-10 calls, 134 s. Across all 20 runs, Argus's sessions took 1 full screenshot and
-10 element crops, ran no JavaScript and clicked by element, since each result
-already says what changed. Claude in Chrome's sessions took 41 screenshots and
-6 zooms, ran JavaScript 30 times to check the page, and clicked by screen
-coordinates 27 times.
+**Where the difference comes from, from the transcripts.** On Client Side
+Delay, Argus's session made one call that clicked, waited for the label to
+appear and clicked it (`{"wait": {"appears": "Data calculated on the client
+side."}}`). Claude in Chrome's round-2 session clicked by coordinates, waited
+18 s, then took three screenshots: two of them
+failed after 30 s each (`Page.captureScreenshot timed out after 30000ms`). It
+then used `find` and JavaScript to locate the label, clicked it, and ran
+JavaScript again to confirm what was under the click: 10 calls, 134 s. Across
+all 20 runs, Argus's sessions took 1 full screenshot and 10 element crops, ran
+no JavaScript and clicked by element, since each result already says what
+changed. Claude in Chrome's sessions took 41 screenshots and 6 zooms, ran
+JavaScript 30 times to check the page, and clicked by screen coordinates 27
+times. Every session's log, with the images the model was shown, is in
+[benchmarks/h2h-2026-09-17](benchmarks/h2h-2026-09-17/).
 
 **Conditions that differ.** Argus ran in a headless browser it launched;
 Claude in Chrome ran in a visible tab of the person's Chromium, which is how it

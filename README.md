@@ -173,10 +173,26 @@ Claude Code session with only one tool's browser tools. 20 runs each:
 | **Argus** (MCP) | **20 / 20** | **0** | **67** | **11.5 s** | **252 s** | **764k** | **$0.85** |
 | Claude in Chrome | 20 / 20 | 0 | 82 | 23.7 s | 620 s | 1,640k | $1.87 |
 
+<img src="docs/media/h2h.svg" alt="Time per session by challenge, two rounds: Argus 8 to 24 s, Claude in Chrome 16 to 134 s; both 20/20 with no false successes" width="100%">
+
 Both tools got every goal right. Argus did it in less than half the time,
 tokens and cost. Neither tool grades itself: pages are served through a proxy
-that reports their real state to the harness. Reproduce with
-`cd argusd && bun bench/h2h.ts --rounds 2`.
+that reports their real state to the harness. Every session's log, with each
+call, what came back and the images the model was shown, is in
+[docs/benchmarks/h2h-2026-09-17](docs/benchmarks/h2h-2026-09-17/). Reproduce
+with `cd argusd && bun bench/h2h.ts --rounds 2`.
+
+**Where the time goes, from the transcripts.** Waiting for a slow page: Argus
+waits for the label in the same call as the click. Claude in Chrome's session
+waited 18 s, then took three screenshots; two of them timed out after 30 s.
+
+<img src="docs/media/h2h-clientdelay.svg" alt="Client Side Delay, round 2: Argus made 2 calls in 23.7 s; Claude in Chrome made 10 calls in 134.4 s, including two screenshots that timed out" width="100%">
+
+Knowing whether a click landed: Argus refuses the second click and names the
+button on top. Claude in Chrome's session added its own click listener with
+JavaScript and read it back. Both were right.
+
+<img src="docs/media/h2h-hiddenlayers.svg" alt="Hidden Layers, round 1: Argus reports the second click as covered by another button; Claude in Chrome verifies with an injected click listener" width="100%">
 
 **Argus's own test pages** ([details](docs/benchmark.md)): ~1,880 tokens for
 Argus and ~5,540 for Claude in Chrome across the five tasks both attempted.
