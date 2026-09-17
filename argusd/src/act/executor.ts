@@ -18,7 +18,8 @@ import { describeTarget, label, locate, publicElement, type Match } from "./loca
 export interface LaneContext {
   page: Page;
   probe: Probe;
-  defaultViewport: { w: number; h: number };
+  /** What "viewport: reset" returns to; null means the real window size, no emulation. */
+  defaultViewport: { w: number; h: number } | null;
 }
 
 const QUIET_MS = 150;
@@ -289,8 +290,12 @@ async function perform(lane: LaneContext, step: Step, verb: Verb, scene: Scene):
 
     case "viewport": {
       const value = (step as { viewport: { w: number; h: number; mobile?: boolean; scale?: number } | "reset" }).viewport;
-      const vp = value === "reset" ? { ...lane.defaultViewport } : value;
-      await setViewport(page, vp);
+      if (value === "reset" && lane.defaultViewport === null) {
+        await page.send("Emulation.clearDeviceMetricsOverride");
+        await page.send("Emulation.setTouchEmulationEnabled", { enabled: false });
+      } else {
+        await setViewport(page, value === "reset" ? { ...lane.defaultViewport! } : value);
+      }
       return { ok: true, expectsEffect: false };
     }
 

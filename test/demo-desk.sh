@@ -40,31 +40,41 @@ for _ in $(seq 1 30); do curl -s -o /dev/null "http://localhost:$PORT/" && break
 URL=http://localhost:$PORT
 omarchy-shell -q argus open
 
+# Each agent returns failure when its own work did not happen, so the summary
+# can never report four agents finished over a broken run.
 checkout() {
-  local D="$A --desk --lane 11"
-  say checkout "$($D open "$URL/test/fixture.html" 2>&1 | first_line)"; pace
-  say checkout "$($D click "button:Place order" 2>&1 | grep -m1 -E 'covered|blocked|✗|clicked' | cut -c1-90)"; pace
+  local D="$A --desk --lane 11" out
+  out=$($D open "$URL/test/fixture.html" 2>&1) || { say checkout "FAILED to open: $(first_line <<<"$out")"; return 1; }
+  say checkout "$(first_line <<<"$out")"; pace
+  say checkout "$($D click "button:Place order" 2>&1 | grep -m1 -E 'covered|✗|✓' | cut -c1-90)"; pace
   say checkout "$($D click "button:Accept" 2>&1 | first_line)"; pace
   say checkout "$($D type "textbox:Email address" "agent@omarchy.org" 2>&1 | first_line)"; pace
-  say checkout "$($D click "button:Place order" 2>&1 | first_line)"
+  out=$($D --expect '{"appears":"Order placed"}' click "button:Place order" 2>&1)
+  local ok=$?
+  say checkout "$(first_line <<<"$out")"
+  return $ok
 }
 
 reviewer() {
-  local D="$A --desk --lane 12"
-  say reviewer "$($D open "$URL/site/" 2>&1 | first_line)"; pace
+  local D="$A --desk --lane 12" out
+  out=$($D open "$URL/site/" 2>&1) || { say reviewer "FAILED to open: $(first_line <<<"$out")"; return 1; }
+  say reviewer "$(first_line <<<"$out")"; pace
   say reviewer "$($D viewport 390x844 2>&1 | first_line)"; pace
-  say reviewer "$($D audit 2>&1 | grep -m1 score | sed 's/^ *//')"; pace
+  out=$($D check 2>&1) || return 1
+  say reviewer "phone: $(grep -m1 score <<<"$out")"; pace
   say reviewer "$($D viewport reset 2>&1 | first_line)"; pace
-  say reviewer "$($D audit 2>&1 | grep -m1 score | sed 's/^ *//')"
+  out=$($D check 2>&1) || return 1
+  say reviewer "desktop: $(grep -m1 score <<<"$out")"
 }
 
 layout() {
-  local D="$A --desk --lane 13"
-  say layout "$($D open "$URL/test/overflow.html" 2>&1 | first_line)"; pace
+  local D="$A --desk --lane 13" out finding
+  out=$($D open "$URL/test/overflow.html" 2>&1) || { say layout "FAILED to open: $(first_line <<<"$out")"; return 1; }
+  say layout "$(first_line <<<"$out")"; pace
   say layout "$($D viewport 390x844 2>&1 | first_line)"; pace
-  local finding
-  finding=$($D audit 2>&1 | grep -m1 -oE 'Page scrolls sideways at [0-9]+px wide')
-  say layout "${finding:+✗ overflow-x: ${finding,}}"
+  finding=$($D check layout 2>&1 | grep -m1 -oE 'Page scrolls sideways at [0-9]+px wide')
+  [[ -n $finding ]] || { say layout "FAILED: the overflow was not found"; return 1; }
+  say layout "✗ overflow-x: ${finding,}"
 }
 
 native() {

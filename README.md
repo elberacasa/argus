@@ -211,10 +211,11 @@ Measured on one Omarchy machine ([method](docs/performance.md)).
 
 ## Status
 
-Argus is a **preview**. `argusd` serves browser lanes over Protocol v0: verified
-`act`, outlines, `check`, priced screenshots and crops, `run`, `sweep` and
-traces, through both the `argus` command and the MCP server. Desks, your own
-browser, nests, the bar, visual deltas and marks still run on the original bash
+Argus is a **preview**. `argusd` serves throwaway and **desk** lanes over
+Protocol v0: verified `act`, outlines, `check`, priced screenshots and crops,
+`run`, `sweep` and traces, through both the `argus` command and the MCP server
+(`argus --desk open …`, `browser_open` with `desk: true`). Your own browser,
+nests, the bar, visual deltas and marks still run on the original bash
 implementation (`argus-legacy`), which `argus` hands those commands to; they
 move into the daemon next. The protocol may change until v1.
 

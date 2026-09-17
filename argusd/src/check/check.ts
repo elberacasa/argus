@@ -70,8 +70,16 @@ export async function check(
     page.send("DOMSnapshot.captureSnapshot", { computedStyles: [...STYLES], includeDOMRects: true }),
     page.send("Page.getLayoutMetrics"),
   ]);
-  const vw = Math.round(metrics.cssLayoutViewport.clientWidth);
-  const contentWidth = Math.round(metrics.cssContentSize.width);
+  // The device width, not the layout viewport: on a phone, content wider than
+  // the screen makes the browser zoom out and the layout viewport grows to
+  // match, so measuring against it compares the page with its own mistake
+  // (measured: overflow.html at 390px reported no overflow). The document
+  // element's clientWidth stays the device width.
+  const widths = await page.send("Runtime.evaluate", {
+    expression: "[document.documentElement.clientWidth, document.documentElement.scrollWidth]", returnByValue: true,
+  }).then((r) => r.result.value as [number, number], () => null);
+  const vw = widths?.[0] || Math.round(metrics.cssLayoutViewport.clientWidth);
+  const contentWidth = Math.max(widths?.[1] ?? 0, Math.round(metrics.cssContentSize.width));
   const inScope = (backendNodeId: number) => options.within === undefined || scene.ancestors(backendNodeId).includes(options.within);
   const refOf = (d: number, backendNodeId: number) => `e${d}.${backendNodeId}`;
 

@@ -15,6 +15,9 @@ export class Client {
   private readonly pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
   private readonly listeners = new Set<(method: string, params: Record<string, unknown>) => void>();
 
+  /** What the daemon said about itself in hello. */
+  server: { name: string; version: string; build?: string } | null = null;
+
   private constructor(private socket: Socket<undefined> | null) {}
 
   static async connect(socketPath: string, client = { name: "argus-client", version: "0.1.0" }): Promise<Client> {
@@ -27,7 +30,8 @@ export class Client {
         error: (_s, error) => c.failAll(error),
       },
     });
-    await c.call("hello", { protocol: "0", client });
+    const hello = await c.call<{ server: { name: string; version: string; build?: string } }>("hello", { protocol: "0", client });
+    c.server = hello.server;
     return c;
   }
 

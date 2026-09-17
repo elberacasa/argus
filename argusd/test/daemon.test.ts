@@ -37,6 +37,7 @@ beforeAll(async () => {
       if (pathname === "/slow.png") return new Promise((resolve) => setTimeout(() => resolve(new Response(Bun.file(join(REPO, "docs/media/argus.svg")), { headers: { "content-type": "image/svg+xml" } })), 900));
       if (pathname === "/gallery") return new Response('<title>Gallery</title><h1>Gallery</h1><img id="slow" alt="Slow" width="200" height="200" src="/slow.png">', { headers: { "content-type": "text/html" } });
       if (pathname === "/hang") return new Promise<Response>((resolve) => setTimeout(() => resolve(new Response("late")), 40_000));
+      if (pathname === "/overflow") return new Response(Bun.file(join(REPO, "test/overflow.html")), { headers: { "content-type": "text/html" } });
       if (pathname === "/quiet") return new Response("<title>Quiet</title><h1>Quiet page</h1><button>Nothing</button>", { headers: { "content-type": "text/html" } });
       return new Response("not found", { status: 404 });
     },
@@ -300,6 +301,15 @@ describe("check and evidence", () => {
     await client.call("lane.close", { lane });
   }, 30_000);
 
+  test("overflow at phone width is measured against the device, not the zoomed-out layout", async () => {
+    const lane = (await client.call<{ lane: string }>("lane.open", { kind: "throwaway", url: `${base}/overflow`, viewport: { w: 390, h: 844 } })).lane;
+    const r = await client.call<{ findings: Array<{ rule: string; examples: Array<{ text?: string }> }> }>("check", { lane, only: ["layout"] });
+    const spilling = r.findings.find((f) => f.rule === "overflow-x")?.examples.map((e) => e.text) ?? [];
+    expect(spilling).toContain("table.visually-hidden");
+    expect(spilling).not.toContain("table.wide"); // wide, but inside its own scroll container
+    await client.call("lane.close", { lane });
+  }, 30_000);
+
   test("check sees inside shadow roots, which in-page audits cannot", async () => {
     const lane = await openLane(`${base}/reach`);
     const r = await client.call<{ findings: Array<{ rule: string; examples: Array<{ text?: string }> }> }>("check", { lane, only: ["a11y"] });
@@ -389,7 +399,16 @@ describe("shutdown", () => {
     const dead = mkdtempSync(join(tmpdir(), "argusd-profile-"));
     await Bun.write(join(dead, "argusd.owner"), "2147483646\n"); // a pid that cannot exist
     const foreign = mkdtempSync(join(tmpdir(), "argusd-profile-"));  // no owner file: not ours, left alone
+    // A headful browser outlives its daemon; a stand-in on the dead owner's
+    // profile, leading its own process group, must be stopped by the sweep.
+    const orphan = Bun.spawn(["bun", "-e", "setInterval(() => {}, 1000)", "--", `--user-data-dir=${dead}`], { stdout: "ignore", stderr: "ignore", detached: true } as never);
+    const bystander = Bun.spawn(["bun", "-e", "setInterval(() => {}, 1000)", "--", `--user-data-dir=${dead}-not-this-one`], { stdout: "ignore", stderr: "ignore", detached: true } as never);
+    await Bun.sleep(300);
     Browser.sweepAbandonedProfiles();
+    await Promise.race([orphan.exited, Bun.sleep(3000)]);
+    expect(orphan.exitCode ?? orphan.signalCode).not.toBeNull();
+    expect(bystander.exitCode).toBeNull();
+    bystander.kill();
     expect(await Bun.file(join(dead, "argusd.owner")).exists()).toBe(false);
     expect(statSync(foreign).isDirectory()).toBe(true);
     rmSync(foreign, { recursive: true, force: true });

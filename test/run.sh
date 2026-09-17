@@ -418,7 +418,18 @@ if [[ ${ARGUS_TEST_DESK:-0} == 1 ]]; then
     || bad "focus never arrived at the desk" "$(grep -E "91|$DESKMON" "$SPYLOG" | head -3)"
   rm -f "$SPYLOG"
 
-  "$ARGUS" desk down >/dev/null 2>&1
+    # Removing a monitor makes Hyprland warp the cursor to a monitor centre; desk
+  # down must put it back. Never moves the cursor itself: it only checks that
+  # a cursor which was not at a centre is not left at one.
+  cur_before=$(hyprctl cursorpos | tr -d ' ')
+  centres=$(hyprctl monitors -j | jq -r '.[] | "\(.x + ((.width / .scale) / 2 | floor)),\(.y + ((.height / .scale) / 2 | floor))"')
+"$ARGUS" desk down >/dev/null 2>&1
+  cur_after=$(hyprctl cursorpos | tr -d ' ')
+  if grep -qx -- "$cur_before" <<<"$centres" || ! grep -qx -- "$cur_after" <<<"$centres" || [[ $cur_after == "$cur_before" ]]; then
+    ok "desk down leaves the cursor where it was"
+  else
+    bad "desk down leaves the cursor where it was" "$cur_before -> $cur_after (a monitor centre)"
+  fi
   hyprctl monitors all -j | jq -e --arg o "$DESKMON" 'any(.[];.name==$o)|not' >/dev/null \
     && ok "desk down removes the monitor" || bad "desk down removes the monitor" "$DESKMON still present"
   [[ $(hyprctl clients -j | jq '[.[]|select(.class=="argus-desk")]|length') -eq 0 ]] \

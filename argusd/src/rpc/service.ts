@@ -13,11 +13,38 @@ import { Trace } from "../trace/trace";
 
 export const VERSION = "0.1.0";
 
+/**
+ * Which code this process runs: the compiled binary's modification time, or
+ * the newest source file's. A client computes the same and warns when a
+ * daemon that is still running predates an update.
+ */
+export function buildId(): string {
+  const { statSync, readdirSync } = require("node:fs") as typeof import("node:fs");
+  const { join } = require("node:path") as typeof import("node:path");
+  const self = process.argv[1] ?? "";
+  if (!self.endsWith(".ts")) {
+    try { return `bin-${Math.floor(statSync(process.execPath).mtimeMs)}`; } catch { return "bin-unknown"; }
+  }
+  const src = join(import.meta.dir, "..");
+  let newest = 0;
+  const walk = (dir: string) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) walk(path);
+      else if (entry.name.endsWith(".ts")) newest = Math.max(newest, statSync(path).mtimeMs);
+    }
+  };
+  walk(src);
+  return `src-${Math.floor(newest)}`;
+}
+
 export interface Notify { (method: string, params: Record<string, unknown>): void }
 
 export class Service {
   readonly lanes: Lanes;
   readonly trace: Trace;
+  /** The code this daemon started with, fixed at startup so an update shows as a mismatch. */
+  private readonly build = buildId();
   private readonly listeners = new Set<Notify>();
 
   constructor(options: { executable?: string; headless?: boolean; traceDir?: string } = {}) {
@@ -62,7 +89,7 @@ export class Service {
       case "hello":
         return {
           protocol: "0",
-          server: { name: "argusd", version: VERSION },
+          server: { name: "argusd", version: VERSION, build: this.build },
           capabilities: { lanes: this.lanes.kinds, eyes: true, decider: "none", check: CATEGORIES },
         };
 

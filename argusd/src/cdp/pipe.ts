@@ -47,6 +47,28 @@ export interface LaunchOptions {
   timeoutMs?: number;
 }
 
+/** Browser processes (group leaders) running on exactly this profile directory. */
+function browsersOnProfile(dir: string): number[] {
+  const pids: number[] = [];
+  for (const entry of readdirSync("/proc")) {
+    if (!/^\d+$/.test(entry)) continue;
+    try {
+      const args = readFileSync(`/proc/${entry}/cmdline`, "utf8").split("\0");
+      if (!args.includes(`--user-data-dir=${dir}`) || args.some((a) => a.startsWith("--type="))) continue;
+      const stat = readFileSync(`/proc/${entry}/stat`, "utf8");
+      const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+      if (Number(fields[2]) === Number(entry)) pids.push(Number(entry)); // pgrp == pid
+    } catch { /* exited */ }
+  }
+  return pids;
+}
+
+/** The browser binary itself, not a launcher that adds the person's flags (Arch's /usr/bin/chromium reads chromium-flags.conf). */
+function defaultExecutable(): string {
+  for (const candidate of ["/usr/lib/chromium/chromium"]) if (existsSync(candidate)) return candidate;
+  return "chromium";
+}
+
 /** Written into every profile argusd creates: the pid of the daemon that owns it. */
 const OWNER_FILE = "argusd.owner";
 
@@ -66,7 +88,14 @@ export class Browser {
       if (!Number.isInteger(owner) || owner <= 0) continue;
       let alive = true;
       try { process.kill(owner, 0); } catch { alive = false; }
-      if (!alive) rmSync(dir, { recursive: true, force: true });
+      if (alive) continue;
+      // A headless browser exits with its pipe; a headful one keeps running and
+      // keeps its window. Stop exactly the browser on this profile: a process
+      // whose command line names this profile and that leads its own group.
+      for (const pid of browsersOnProfile(dir)) {
+        try { process.kill(-pid, "SIGTERM"); } catch { /* gone */ }
+      }
+      rmSync(dir, { recursive: true, force: true });
     }
   }
 
@@ -83,6 +112,9 @@ export class Browser {
     private readonly profileDir: string,
     private readonly timeoutMs: number,
   ) {
+    // A browser that exits (a headful one does when its last window closes)
+    // breaks the pipe; the write error is the first sign, and must not escape.
+    toBrowser.on("error", (error) => this.fail(error instanceof Error ? error : new Error(String(error))));
     fromBrowser.setEncoding("utf8");
     fromBrowser.on("data", (chunk: string) => this.receive(chunk));
     proc.on("exit", () => this.fail(new Error("browser exited")));
@@ -102,7 +134,7 @@ export class Browser {
       ...(options.args ?? []),
       "about:blank",
     ];
-    const proc = spawn(options.executable ?? "chromium", args, {
+    const proc = spawn(options.executable ?? defaultExecutable(), args, {
       // fd 3: we write, the browser reads. fd 4: the browser writes, we read.
       stdio: ["ignore", "ignore", "ignore", "pipe", "pipe"],
       // Its own process group, so argusd can stop exactly this browser and
@@ -156,7 +188,10 @@ export class Browser {
     });
   }
 
-  get alive(): boolean { return !this.closed; }
+  /** Alive means the process is still running and its pipe still writable, not just "not closed by us". */
+  get alive(): boolean {
+    return !this.closed && this.proc.exitCode === null && this.proc.signalCode === null && !this.toBrowser.destroyed;
+  }
 
   /** Called once when the browser goes away for any reason. */
   onExit(listener: () => void): void { this.proc.once("exit", listener); }
@@ -226,13 +261,14 @@ export class Page {
    * Open a page. With `isolated`, the page gets its own browser context: no
    * cookies, storage or cache shared with any other lane in the same browser.
    */
-  static async open(browser: Browser, options: { isolated?: boolean } = {}): Promise<Page> {
+  static async open(browser: Browser, options: { isolated?: boolean; newWindow?: boolean } = {}): Promise<Page> {
     const contextId = options.isolated
       ? (await browser.send("Target.createBrowserContext", { disposeOnDetach: true })).browserContextId
       : undefined;
     const { targetId } = await browser.send("Target.createTarget", {
       url: "about:blank",
       ...(contextId ? { browserContextId: contextId } : {}),
+      ...(options.newWindow ? { newWindow: true } : {}),
     });
     const { sessionId } = await browser.send("Target.attachToTarget", { targetId, flatten: true });
     const page = new Page(browser, targetId, sessionId, contextId);

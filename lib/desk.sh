@@ -111,6 +111,21 @@ desk_up() {
   printf 'desk up: virtual monitor %s, workspace %s\n' "$output" "$ARGUS_DESK_WS"
 }
 
+desk_close_daemon_lanes() {
+  local sock=${ARGUS_SOCKET:-$XDG_RUNTIME_DIR/argus/argus.sock} lane call
+  [[ -S $sock ]] || return 0
+  call() {
+    if [[ -x $ARGUS_ROOT/argusd/dist/argusd && -z $(find "$ARGUS_ROOT/argusd/src" -newer "$ARGUS_ROOT/argusd/dist/argusd" -name '*.ts' -print -quit) ]]; then
+      ARGUS_SOCKET=$sock "$ARGUS_ROOT/argusd/dist/argusd" call "$@"
+    else
+      ARGUS_SOCKET=$sock bun "$ARGUS_ROOT/argusd/src/main.ts" call "$@"
+    fi
+  }
+  for lane in $(call lane.list '{}' 2>/dev/null | jq -r '.lanes[]? | select(.kind == "desk") | .lane'); do
+    call lane.close "{\"lane\":\"$lane\"}" >/dev/null 2>&1
+  done
+}
+
 desk_down() {
   local output; output=$(desk_output)
   [[ -z $output ]] && { echo "desk is not up"; return 0; }
@@ -118,8 +133,24 @@ desk_down() {
   [[ $(jq -r '.peek // empty' "$ARGUS_DESK_FILE" 2>/dev/null) != "" ]] && desk_peek off >/dev/null
 
   ( ARGUS_DESK=1; pool_shutdown_kind )
+  # argusd's desk lanes too: once the monitor is gone, any window still on it
+  # would fall onto the person's screen.
+  desk_close_daemon_lanes
   sleep 0.4
+  # Removing a monitor makes Hyprland warp the cursor to the centre of the
+  # focused one (measured: 3144,360 -> 2880,540, the centre of a 1920x1080
+  # monitor at x=1920). Put it back -- but only when it landed exactly on a
+  # monitor centre, so a real movement by the person is never undone.
+  local cursor_before cursor_after
+  cursor_before=$(hyprctl cursorpos 2>/dev/null | tr -d ' ')
   hyprctl output remove "$output" >/dev/null 2>&1
+  sleep 0.15
+  cursor_after=$(hyprctl cursorpos 2>/dev/null | tr -d ' ')
+  if [[ -n $cursor_before && $cursor_after != "$cursor_before" ]] \
+    && hyprctl monitors -j | jq -e --arg p "$cursor_after" \
+      'any(.[]; "\(.x + ((.width / .scale) / 2 | floor)),\(.y + ((.height / .scale) / 2 | floor))" == $p)' >/dev/null; then
+    hyprctl eval "return hl.dispatch(hl.dsp.cursor.move({ x = ${cursor_before%,*}, y = ${cursor_before#*,} }))" >/dev/null 2>&1
+  fi
   hl_eval "if argus_desk_rule3 then argus_desk_rule3:set_enabled(false) end" 2>/dev/null
   hl_eval "hl.workspace_rule({ workspace = \"$ARGUS_DESK_WS\", persistent = false })" 2>/dev/null
   rm -f "$ARGUS_DESK_FILE"

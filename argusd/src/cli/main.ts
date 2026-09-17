@@ -12,12 +12,13 @@ import { existsSync, readFileSync } from "node:fs";
 import { ArgusError, type Client } from "../rpc/client";
 import { connect } from "../rpc/connect";
 import { defaultSocketPath } from "../rpc/server";
+import { buildId } from "../rpc/service";
 import type { ActResult, Target } from "../protocol/types";
 import { renderAct, renderCheck, renderFind, renderObservation, renderRun, renderSweep } from "../render/text";
 
 const USAGE = `argus -- drive browsers and be told the truth about what happened.
 
-usage: argus [--lane NAME] [--json] [--expect JSON] <command>
+usage: argus [--lane NAME] [--desk] [--json] [--expect JSON] <command>
 
   open <url>                    load a page; prints what loaded and an outline
   click <target> [nth]          click with a real pointer, or say why it cannot
@@ -48,7 +49,8 @@ usage: argus [--lane NAME] [--json] [--expect JSON] <command>
 
 A target is role:name ("button:Sign in"), a ref from an outline ("e0.57"),
 text:... for plain text, or JSON ({"role":"button","name":"Save","nth":2}).
-Lanes are named; the default is "main" (or $ARGUS_LANE).
+Lanes are named; the default is "main" (or $ARGUS_LANE). With --desk, open
+starts the lane as a real window on the desk, a monitor only agents use.
 
 Desks, your own browser, nests and the bar: argus desk|peek|own|nest|bar ...
 `;
@@ -73,14 +75,14 @@ function parseJsonArg(raw: string | undefined, what: string): unknown {
 
 class UsageError extends Error {}
 
-interface Options { lane: string; json: boolean; expect?: unknown }
+interface Options { lane: string; json: boolean; expect?: unknown; desk: boolean }
 
-async function laneId(c: Client, label: string, openUrl?: string): Promise<{ id: string; opened?: Record<string, unknown> } | null> {
+async function laneId(c: Client, label: string, openUrl?: string, desk = false): Promise<{ id: string; opened?: Record<string, unknown> } | null> {
   const { lanes } = await c.call<{ lanes: Array<{ lane: string; label: string }> }>("lane.list");
   const found = lanes.find((l) => l.label === label);
   if (found) return { id: found.lane };
   if (!openUrl) return null;
-  const opened = await c.call<Record<string, unknown>>("lane.open", { kind: "throwaway", label, url: openUrl });
+  const opened = await c.call<Record<string, unknown>>("lane.open", { kind: desk ? "desk" : "throwaway", label, url: openUrl });
   return { id: opened.lane as string, opened };
 }
 
@@ -102,12 +104,13 @@ function print(o: Options, result: unknown, text: () => string): void {
 }
 
 export async function cli(argv: string[]): Promise<number> {
-  const o: Options = { lane: process.env.ARGUS_LANE || "main", json: false };
+  const o: Options = { lane: process.env.ARGUS_LANE || "main", json: false, desk: false };
   const args: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
     if (a === "--lane") o.lane = argv[++i] ?? o.lane;
     else if (a === "--json") o.json = true;
+    else if (a === "--desk") o.desk = true;
     else if (a === "--expect") o.expect = JSON.parse(argv[++i] ?? "{}");
     else if (a === "-h" || a === "--help" || a === "help") { console.log(USAGE); return 0; }
     else args.push(a);
@@ -118,6 +121,8 @@ export async function cli(argv: string[]): Promise<number> {
   try {
     if (command === "daemon") return await daemon(args[0] ?? "status");
     const c = await connect({ name: "argus-cli" });
+    if (c.server?.build && c.server.build !== buildId())
+      console.error("argus: the running argusd predates this code; restart it to use the update: argus daemon stop");
     try {
       return await dispatch(c, o, command, args);
     } finally {
@@ -137,10 +142,10 @@ async function dispatch(c: Client, o: Options, command: string, args: string[]):
     case "open": {
       need(1, "open <url>");
       const url = args[0]!;
-      const found = await laneId(c, o.lane, url);
+      const found = await laneId(c, o.lane, url, o.desk);
       if (found!.opened) {
         const { outline } = await c.call<{ outline: string }>("scene.outline", { lane: found!.id });
-        print(o, found!.opened, () => [`lane ${o.lane} opened`, ...renderObservation((found!.opened!.observation ?? {}) as never), "", outline].join("\n"));
+        print(o, found!.opened, () => [`lane ${o.lane} opened${o.desk ? " on the desk" : ""}`, ...renderObservation((found!.opened!.observation ?? {}) as never), "", outline].join("\n"));
         return 0;
       }
       const r = await c.call<ActResult>("act", { lane: found!.id, steps: [o.expect ? { open: url, expect: o.expect } : { open: url }] });

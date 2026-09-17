@@ -6,7 +6,7 @@
 // client waits for the socket to answer, up to a limit.
 
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, openSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, statSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { Client } from "./client";
@@ -28,23 +28,41 @@ export async function connect(options: { socketPath?: string; name?: string; sta
     if (options.start === false) throw error;
   }
 
-  const stateDir = join(process.env.XDG_STATE_HOME || join(homedir(), ".local", "state"), "argus");
-  mkdirSync(stateDir, { recursive: true, mode: 0o700 });
-  const log = openSync(join(stateDir, "argusd.log"), "a", 0o600);
-  const [command, ...args] = daemonCommand();
-  const child = spawn(command!, [...args, "--socket", socketPath], { detached: true, stdio: ["ignore", log, log] });
-  child.unref();
+  // Only one client starts the daemon. Several started at once (three
+  // commands in parallel did) each launched their own, and lanes opened in one
+  // were missing from the others. The rest wait for the socket.
+  mkdirSync(dirname(socketPath), { recursive: true, mode: 0o700 });
+  const startLock = `${socketPath}.starting`;
+  let starter = false;
+  try {
+    if (existsSync(startLock) && Date.now() - statSync(startLock).mtimeMs > 15_000) unlinkSync(startLock);
+    closeSync(openSync(startLock, "wx", 0o600));
+    starter = true;
+  } catch { /* someone else is starting it */ }
 
-  const deadline = performance.now() + 8000;
-  let last: unknown;
-  while (performance.now() < deadline) {
-    await Bun.sleep(60);
-    if (!existsSync(socketPath)) continue;
-    try {
-      return await Client.connect(socketPath, client);
-    } catch (error) {
-      last = error;
-    }
+  if (starter) {
+    const stateDir = join(process.env.XDG_STATE_HOME || join(homedir(), ".local", "state"), "argus");
+    mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+    const log = openSync(join(stateDir, "argusd.log"), "a", 0o600);
+    const [command, ...args] = daemonCommand();
+    const child = spawn(command!, [...args, "--socket", socketPath], { detached: true, stdio: ["ignore", log, log] });
+    child.unref();
   }
-  throw new Error(`argusd did not start within 8s (see ${join(stateDir, "argusd.log")}; socket ${socketPath}, dir ${existsSync(dirname(socketPath))})${last ? `: ${String(last)}` : ""}`);
+
+  const deadline = performance.now() + 10_000;
+  let last: unknown;
+  try {
+    while (performance.now() < deadline) {
+      await Bun.sleep(60);
+      if (!existsSync(socketPath)) continue;
+      try {
+        return await Client.connect(socketPath, client);
+      } catch (error) {
+        last = error;
+      }
+    }
+  } finally {
+    if (starter) try { unlinkSync(startLock); } catch { /* gone */ }
+  }
+  throw new Error(`argusd did not start within 10s (see $XDG_STATE_HOME/argus/argusd.log; socket ${socketPath})${last ? `: ${String(last)}` : ""}`);
 }

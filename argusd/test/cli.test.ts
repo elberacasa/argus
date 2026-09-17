@@ -51,6 +51,18 @@ describe("argus", () => {
     expect(bad.err).toContain('unknown command "frobnicate"');
   });
 
+  test("commands started at the same moment share one daemon", async () => {
+    const [a, b, c] = await Promise.all([
+      argus("--lane", "p1", "open", `${base}/checkout`),
+      argus("--lane", "p2", "open", `${base}/checkout`),
+      argus("--lane", "p3", "open", `${base}/checkout`),
+    ]);
+    expect([a.code, b.code, c.code]).toEqual([0, 0, 0]);
+    const lanes = (await argus("lanes")).out;
+    for (const l of ["p1", "p2", "p3"]) expect(lanes).toContain(l);
+    for (const l of ["p1", "p2", "p3"]) await argus("--lane", l, "close");
+  }, 60_000);
+
   test("acting before opening a lane says how to start", async () => {
     const r = await argus("click", "button:x");
     expect(r.code).toBe(1);
