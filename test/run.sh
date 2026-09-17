@@ -45,6 +45,10 @@ for f in lib/probe.js lib/locate.js lib/audit.js; do
   node -e "new Function(require('fs').readFileSync('$f','utf8'))" 2>/dev/null || bad "$f parses" "syntax error"
 done
 ok "every injected script parses as a WebDriver function body"
+sw=$(jq -r '.background.service_worker' extension/manifest.json); ver=$(jq -r .version extension/manifest.json)
+[[ $sw == "worker-$ver.js" && -f extension/$sw ]] && grep -q "background.js?v=$ver" "extension/$sw" \
+  && ok "the extension's worker file is named for its version, so Chromium cannot run a stale cached copy" \
+  || bad "extension worker named for its version" "$sw vs $ver"
 printf '\n'
 
 printf '\033[2mdelta engine\033[0m\n'
