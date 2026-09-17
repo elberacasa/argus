@@ -86,8 +86,18 @@ const text = (t: string, isError = false): ToolResult => ({ content: [{ type: "t
 export class McpServer {
   private client: Client | null = null;
   private omarchy: Omarchy | null = null;
+  /**
+   * Lanes belong to the session that opened them. Two Claude Code sessions, or
+   * two agents fanned out each with their own argus, both ask for "main": they
+   * must not drive the same browser. The scope is the client process that
+   * started this server, so lanes survive the server itself restarting.
+   */
+  private readonly scope = process.env.ARGUS_LANE_SCOPE || `s${process.ppid}`;
 
   constructor(private readonly options: { socketPath?: string } = {}) {}
+
+  private label(name: string | undefined): string { return `${this.scope}:${name || "main"}`; }
+  private nameOf(label: string): string | null { return label.startsWith(`${this.scope}:`) ? label.slice(this.scope.length + 1) : null; }
 
   private async daemon(): Promise<Client> {
     if (!this.client) this.client = await connect({ ...(this.options.socketPath ? { socketPath: this.options.socketPath } : {}), name: "argus-mcp" });
@@ -96,7 +106,7 @@ export class McpServer {
 
   /** The daemon lane id for a lane name, opening it if asked to. */
   private async laneId(name: string | undefined, open?: { url: string; viewport?: { w: number; h: number }; desk?: boolean; own?: boolean }): Promise<{ id: string; opened?: Record<string, unknown> } | null> {
-    const label = name || "main";
+    const label = this.label(name);
     const c = await this.daemon();
     const { lanes } = await c.call<{ lanes: Array<{ lane: string; label: string }> }>("lane.list");
     const existing = lanes.find((l) => l.label === label);
@@ -198,7 +208,11 @@ export class McpServer {
       }
       case "browser_lanes": {
         const { lanes } = await (await this.daemon()).call<{ lanes: Array<{ label: string; url: string; title: string; busy: boolean }> }>("lane.list");
-        return text(lanes.map((l) => `${l.label || "(unnamed)"}  ${l.title || l.url}${l.busy ? "  busy" : ""}`).join("\n") || "(no lanes)");
+        const mine = lanes.map((l) => ({ ...l, name: this.nameOf(l.label ?? "") })).filter((l) => l.name !== null);
+        const elsewhere = lanes.length - mine.length;
+        const lines = mine.map((l) => `${l.name || "(unnamed)"}  ${l.title || l.url}${l.busy ? "  busy" : ""}`);
+        if (elsewhere) lines.push(`(${elsewhere} more open in other sessions)`);
+        return text(lines.join("\n") || "(no lanes)");
       }
       case "browser_close": {
         const l = await this.laneId(args.lane as string | undefined);

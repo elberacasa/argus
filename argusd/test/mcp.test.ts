@@ -47,6 +47,7 @@ beforeAll(async () => {
       const { pathname } = new URL(req.url);
       if (pathname === "/checkout") return new Response(Bun.file(join(REPO, "test/fixture.html")), { headers: { "content-type": "text/html" } });
       if (pathname === "/api/receipt") return new Response("down", { status: 500 });
+      if (pathname === "/quiet") return new Response("<title>Quiet</title><h1>Quiet page</h1>", { headers: { "content-type": "text/html" } });
       return new Response("not found", { status: 404 });
     },
   });
@@ -137,4 +138,56 @@ describe("argusd mcp", () => {
     expect(r.isError).toBe(true);
     expect(textOf(r)).toContain("destructive");
   }, 30_000);
+});
+
+describe("two sessions at once", () => {
+  test('each session gets its own "main": agents fanned out never share a browser', async () => {
+    // A second argus, as a second Claude Code session or a fanned-out agent runs it.
+    const other = Bun.spawn(["bun", join(import.meta.dir, "../src/main.ts"), "mcp"], {
+      stdin: "pipe", stdout: "pipe", stderr: "pipe",
+      env: { ...process.env, ARGUS_SOCKET: socket, XDG_STATE_HOME: join(dir, "state"), ARGUS_LANE_SCOPE: "second-session" },
+    });
+    let buf = "";
+    const replies = new Map<number, (v: any) => void>();
+    void (async () => {
+      const decoder = new TextDecoder();
+      for await (const chunk of other.stdout) {
+        buf += decoder.decode(chunk, { stream: true });
+        let nl: number;
+        while ((nl = buf.indexOf("\n")) !== -1) {
+          const msg = JSON.parse(buf.slice(0, nl));
+          buf = buf.slice(nl + 1);
+          replies.get(msg.id)?.(msg);
+          replies.delete(msg.id);
+        }
+      }
+    })();
+    const ask = (id: number, method: string, params: unknown) => new Promise<any>((resolve) => {
+      replies.set(id, resolve);
+      other.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n");
+      other.stdin.flush();
+    });
+    await ask(1, "initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "test", version: "0" } });
+    try {
+      // Both sessions open the lane they both call "main".
+      await tool("browser_open", { url: `http://127.0.0.1:${pages.port}/checkout` });
+      await ask(2, "tools/call", { name: "browser_open", arguments: { url: `http://127.0.0.1:${pages.port}/quiet` } });
+      const mineList = textOf(await tool("browser_lanes", {}));
+      const theirs = await ask(3, "tools/call", { name: "browser_lanes", arguments: {} });
+      const theirList = theirs.result.content.map((c: any) => c.text ?? "").join("");
+      // Each sees its own lane, and knows the other session has one.
+      expect(mineList).toContain("main");
+      expect(mineList).toContain("1 more open in other sessions");
+      expect(theirList).toContain("main");
+      expect(theirList).toContain("1 more open in other sessions");
+      // And they are different browsers: each shows the page it opened.
+      expect(textOf(await tool("browser_outline", {}))).toContain("Checkout");
+      const outline = await ask(4, "tools/call", { name: "browser_outline", arguments: {} });
+      expect(outline.result.content.map((c: any) => c.text ?? "").join("")).toContain("Quiet");
+      await ask(5, "tools/call", { name: "browser_close", arguments: {} });
+    } finally {
+      other.stdin.end();
+      other.kill();
+    }
+  }, 60_000);
 });

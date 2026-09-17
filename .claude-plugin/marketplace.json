@@ -1,0 +1,11 @@
+{
+  "name": "argus",
+  "owner": { "name": "elberacasa", "url": "https://github.com/elberacasa" },
+  "plugins": [
+    {
+      "name": "argus",
+      "source": "./claude-plugin",
+      "description": "Give each agent its own browser and screen on Omarchy: every step verified against the page, every failure named."
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "name": "argus",
+  "displayName": "Argus",
+  "version": "0.1.0",
+  "description": "Give each agent its own browser and screen on Omarchy: every step verified against the page, every failure named.",
+  "author": { "name": "elberacasa" },
+  "repository": "https://github.com/elberacasa/argus",
+  "homepage": "https://github.com/elberacasa/argus",
+  "license": "MIT",
+  "keywords": ["browser", "testing", "ui", "omarchy", "computer-use"]
+}

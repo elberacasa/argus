@@ -1,0 +1,10 @@
+#!/bin/bash
+# The plugin's entry to argusd's MCP server. The plugin ships inside the argus
+# repository, so the daemon it talks to is the one beside it; an argus
+# installed elsewhere on PATH wins, so a system install is used when there is one.
+set -euo pipefail
+here=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
+if [[ -x "$here/../bin/argus-mcp" ]]; then exec "$here/../bin/argus-mcp" "$@"; fi
+if command -v argus-mcp >/dev/null 2>&1; then exec argus-mcp "$@"; fi
+echo "argus-mcp not found: install Argus from https://github.com/elberacasa/argus" >&2
+exit 1
