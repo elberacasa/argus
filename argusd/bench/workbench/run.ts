@@ -12,13 +12,13 @@
 // what happened. Traps (tasks that cannot succeed) count as correct only when
 // the session reports failure.
 
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { Client } from "../../src/rpc/client";
 import { connect } from "../../src/rpc/connect";
 import { ENDING, runSession } from "../lib/session";
-import { startWorkbench } from "./app";
+import { AVATAR_PATH, startWorkbench } from "./app";
 import { TASKS } from "./tasks";
 
 type Tool = "argus" | "argus-own" | "chrome";
@@ -33,6 +33,11 @@ const only = args;
 const work = mkdtempSync(join(tmpdir(), "argus-workbench-"));
 const socket = join(work, "run", "argus.sock");
 mkdirSync(join(work, "cwd"), { recursive: true });
+// The file a session is asked to upload lives in that session's own working
+// directory: a tool that may only read what the session may read is not being
+// measured on where the harness happened to put a file.
+copyFileSync(AVATAR_PATH, join(work, "cwd", "avatar.png"));
+process.env.ARGUS_BENCH_AVATAR = join(work, "cwd", "avatar.png");
 mkdirSync(join(work, "run"), { recursive: true });
 writeFileSync(join(work, "mcp.json"), JSON.stringify({ mcpServers: { argus: { command: join(ROOT, "bin", "argus-mcp"), env: { ARGUS_SOCKET: socket } } } }));
 
@@ -77,7 +82,9 @@ try {
         // A session whose browser tool never connected measured nothing: retry it, never score it.
         for (let attempt = 1; ; attempt++) {
           wb.reset();
-          r = await runSession({ prompt: `${t.task(wb.base)}\n\n${SETUP[tool].intro} ${ENDING}`, model: MODEL, flags: SETUP[tool].flags, cwd: join(work, "cwd"), transcript });
+          // Every tool is given the session directory holding the file a task
+          // may ask it to upload: the same permission for all of them.
+          r = await runSession({ prompt: `${t.task(wb.base)}\n\n${SETUP[tool].intro} ${ENDING}`, model: MODEL, flags: [...SETUP[tool].flags, "--add-dir", join(work, "cwd"), "--allowedTools", "Read"], cwd: join(work, "cwd"), transcript });
           if (!readFileSync(transcript, "utf8").includes("Browser extension is not connected")) break;
           console.error(`skip  ${tool} ${t.id} r${round}: the browser extension was not connected (attempt ${attempt})`);
           if (attempt === 3) throw new Error(`${tool}: the browser extension is not connected; reconnect it and rerun`);

@@ -168,3 +168,28 @@ describe("naming", () => {
     await service.call("lane.close", { lane });
   }, 30_000);
 });
+
+describe("scrolling from inside a list", () => {
+  test("naming a row, not the list, still scrolls the list that holds it", async () => {
+    const lane = await open(`${wb.base}/settings`);
+    const r = await act(lane, [
+      { click: "combobox:Country" },
+      // "option:Albania" is a row in the list, not the scrolling box around it.
+      { scroll: { until: "option:Uruguay", in: "option:Albania" } },
+      { click: "option:Uruguay" },
+      { click: "button:Save", expect: { appears: "Saved." } },
+    ]);
+    expect(r.ok).toBe(true);
+    expect(wb.state.country).toBe("Uruguay");
+    await service.call("lane.close", { lane });
+  }, 60_000);
+
+  test("choosing an option in a control that is not a <select> says what to do instead", async () => {
+    const lane = await open(`${wb.base}/settings`);
+    const r = await act(lane, [{ select: ["combobox:Country", "Uruguay"] }]);
+    expect(r.ok).toBe(false);
+    expect(r.steps[0]!.diagnosis!.hint).toContain("not a <select>");
+    expect(r.steps[0]!.diagnosis!.hint).toContain("scroll");
+    await service.call("lane.close", { lane });
+  }, 30_000);
+});

@@ -133,9 +133,12 @@ export class OwnPage implements CdpPage {
   get alive(): boolean { return this.bridge.connected && !this.detached; }
 
   send<M extends Method>(method: M, params?: Params<M>): Promise<Result<M>> {
-    // A capture of a tab the browser is not painting can stall; answer sooner.
-    const timeout = method === "Page.captureScreenshot" ? 8_000 : 30_000;
-    return this.bridge.request<Result<M>>("cdp", { lane: this.lane, method, params: params ?? {} }, timeout);
+    // A capture of a tab the browser is not painting stalls until it gives up;
+    // answer sooner, and say what is actually wrong.
+    if (method !== "Page.captureScreenshot") return this.bridge.request<Result<M>>("cdp", { lane: this.lane, method, params: params ?? {} }, 30_000);
+    return this.bridge.request<Result<M>>("cdp", { lane: this.lane, method, params: params ?? {} }, 6_000).catch((error) => {
+      throw new Error(`${error instanceof Error ? error.message : String(error)}. This tab is in the background and the browser only paints the tab in front; read the page instead (outline, find, check), or ask the person to bring the tab forward.`);
+    });
   }
 
   on<E extends EventName>(event: E, listener: (params: EventParams<E>) => void): () => void {

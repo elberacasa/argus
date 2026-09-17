@@ -54,7 +54,7 @@ export const TASKS: Task[] = [
   },
   {
     id: "upload", title: "File upload", group: "web app", possible: true,
-    task: (b) => `Open ${b}/avatar and set the profile picture to the image file at ${AVATAR_PATH}. Success means that exact file was uploaded.`,
+    task: (b) => `Open ${b}/avatar and set the profile picture to the image file at ${process.env.ARGUS_BENCH_AVATAR ?? AVATAR_PATH}. Success means that exact file was uploaded.`,
     judge: (_, s) => ({ met: s.avatarSha === AVATAR_SHA, truth: s.avatarSha ? (s.avatarSha === AVATAR_SHA ? "exact file uploaded" : "a different file was uploaded") : "nothing uploaded" }),
   },
   {

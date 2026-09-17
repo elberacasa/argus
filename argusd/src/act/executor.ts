@@ -250,7 +250,7 @@ async function perform(lane: LaneContext, step: Step, verb: Verb, scene: Scene):
       const reached = await reach(lane, scene, target, true);
       if (!reached.ok) return { ...reached, expectsEffect: false };
       const chosen = await callOn(page, reached.element.backendNodeId, `function (want) {
-        if (!(this instanceof HTMLSelectElement)) return { error: "not a select element" };
+        if (!(this instanceof HTMLSelectElement)) return { error: "custom" };
         const norm = (s) => s.replace(/\\s+/g, " ").trim().toLowerCase();
         const option = [...this.options].find((o) => norm(o.text) === norm(want) || o.value === want);
         if (!option) return { error: "no option", options: [...this.options].map((o) => o.text).slice(0, 12) };
@@ -259,6 +259,11 @@ async function perform(lane: LaneContext, step: Step, verb: Verb, scene: Scene):
         this.dispatchEvent(new Event("change", { bubbles: true }));
         return { value: option.text };
       }`, [option]) as { error?: string; options?: string[]; value?: string };
+      if (chosen?.error === "custom")
+        return {
+          ok: false, target: reached.element, match: reached.match, expectsEffect: false,
+          diagnosis: { reason: "not-found", hint: `${label(reached.element)} is the page's own control, not a <select>: click it to open, then click the option (a long list may need {"scroll": {"until": "option:${option}", "in": <the list>}} first).`, didYouMean: [] },
+        };
       if (chosen?.error)
         return {
           ok: false, target: reached.element, match: reached.match, expectsEffect: false,
@@ -579,8 +584,13 @@ async function dragBetween(page: Page, from: { x: number; y: number }, to: { x: 
  */
 async function scrollUntil(lane: LaneContext, target: Target, at: { x: number; y: number }, container: SceneElement | undefined): Promise<Performed> {
   const { page } = lane;
-  const height = container?.bounds ? container.bounds.h : (await captureScene(page)).viewport.h;
-  const delta = Math.max(40, Math.round(height * 0.8));
+  // An agent names what it can see -- a row inside the list -- so the wheel
+  // distance and "did anything move" come from whatever actually scrolls
+  // around that element, not from the element itself.
+  const area = container ? await scrollingArea(page, container.backendNodeId) : null;
+  const height = area?.h ?? container?.bounds?.h ?? (await captureScene(page)).viewport.h;
+  const delta = Math.max(120, Math.round(height * 0.8));
+  if (area) at = { x: Math.round(area.x + area.w / 2), y: Math.round(area.y + area.h / 2) };
   let still = 0, turns = 0, last = "";
   for (; turns < 400; turns++) {
     const scene = await captureScene(page);
@@ -591,9 +601,12 @@ async function scrollUntil(lane: LaneContext, target: Target, at: { x: number; y
       return { ok: true, target: hit, ...(found.ok ? { match: found.match } : {}), expectsEffect: false };
     }
     const where = container
-      ? await callOn(page, container.backendNodeId, "function () { return this.scrollTop + ':' + this.scrollHeight }").catch(() => "")
+      ? JSON.stringify(await scrollingArea(page, container.backendNodeId).catch(() => null))
       : await page.send("Runtime.evaluate", { expression: "scrollY + ':' + document.documentElement.scrollHeight", returnByValue: true }).then((r) => r.result.value, () => "");
-    const signature = `${where}|${scene.texts.length}|${scene.elements.length}`;
+    // What is on the page, not how much of it: a list that recycles its rows
+    // keeps the same number of texts while showing entirely different ones.
+    const shown = scene.texts.slice(0, 4).map((t) => t.text).join("/") + "|" + scene.texts.slice(-4).map((t) => t.text).join("/");
+    const signature = `${where}|${scene.texts.length}|${shown}`;
     still = signature === last ? still + 1 : 0;
     last = signature;
     if (still >= 3) break;
@@ -607,6 +620,21 @@ async function scrollUntil(lane: LaneContext, target: Target, at: { x: number; y
     ok: false, expectsEffect: false,
     diagnosis: { reason: "not-found", hint: `Scrolled ${container ? label(container) : "the page"} ${turns} time(s) to the end; no ${describeTarget(target)} appeared.`, didYouMean: [] },
   };
+}
+
+/** The nearest box around a node that actually scrolls, with where it is scrolled to. */
+async function scrollingArea(page: Page, backendNodeId: number): Promise<{ x: number; y: number; w: number; h: number; top: number; left: number; height: number } | null> {
+  const r = await callOn(page, backendNodeId, `function () {
+    for (let e = this; e; e = e.parentElement) {
+      const s = getComputedStyle(e);
+      const scrolls = /auto|scroll|overlay/.test(s.overflowY) || /auto|scroll|overlay/.test(s.overflowX);
+      if (!scrolls || (e.scrollHeight <= e.clientHeight + 4 && e.scrollWidth <= e.clientWidth + 4)) continue;
+      const b = e.getBoundingClientRect();
+      return { x: b.x, y: b.y, w: b.width, h: b.height, top: e.scrollTop, left: e.scrollLeft, height: e.scrollHeight };
+    }
+    return null;
+  }`).catch(() => null);
+  return (r ?? null) as { x: number; y: number; w: number; h: number; top: number; left: number; height: number } | null;
 }
 
 /** The most meaningful element at a hit point: a named ancestor if the hit itself is anonymous. */
