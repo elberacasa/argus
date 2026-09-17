@@ -40,6 +40,7 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
 });
 const lanes = new Map();      // lane -> tabId, for tabs this extension created
 const attached = new Set();   // tabIds with the debugger attached
+const ungrouped = new Set();  // argus tabs whose grouping failed; retried on the next command
 
 // ---- lane bookkeeping, restored across service-worker restarts ----------------
 // storage.session survives the worker being suspended but not a browser
@@ -104,6 +105,20 @@ async function settledTab(tabId, timeoutMs = 5000) {
   }
 }
 
+// Chromium refuses tab edits while its tab strip is busy ("Tabs cannot be
+// edited right now (user may be dragging a tab)") -- measured twice in a real
+// browser, once leaving a tab argus could no longer close. Retry briefly.
+async function tabEdit(fn) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fn();
+    } catch (e) {
+      if (attempt >= 30 || !String(e.message || e).includes("cannot be edited right now")) throw e;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+  }
+}
+
 async function groupIntoArgus(tabId) {
   const groups = await chrome.tabGroups.query({ title: GROUP.title });
   const tab = await chrome.tabs.get(tabId);
@@ -127,29 +142,32 @@ const ops = {
       try { await chrome.tabs.get(tabId); const fresh = await ensureAttached(tabId); return { tabId, reused: true, fresh }; }
       catch { lanes.delete(lane); }
     }
-    const tab = await chrome.tabs.create({ url: "about:blank", active: false });
-    // Defensive: let the initial blank document commit before attaching, so
-    // nothing registered for the next page is racing it. (A first-load failure
-    // that looked like this race turned out to be stale extension code cached
-    // under an unchanged version; this wait was not shown to be required.)
-    await settledTab(tab.id);
-    await groupIntoArgus(tab.id);
-    await ensureAttached(tab.id);
+    const tab = await tabEdit(() => chrome.tabs.create({ url: "about:blank", active: false }));
+    // Registered before anything else can fail, so a tab argus created is
+    // always one argus can find and close.
     lanes.set(lane, tab.id);
     await persist();
+    // Defensive: let the initial blank document commit before attaching, so
+    // nothing registered for the next page is racing it.
+    await settledTab(tab.id);
+    await tabEdit(() => groupIntoArgus(tab.id)).catch(() => { ungrouped.add(tab.id); });
+    await ensureAttached(tab.id);
     return { tabId: tab.id, reused: false, fresh: true };
   },
 
   async lane_close({ lane }) {
     const tabId = tabOf(lane);
     if (attached.has(tabId)) await chrome.debugger.detach({ tabId }).catch(() => {});
-    await chrome.tabs.remove(tabId);
+    await tabEdit(() => chrome.tabs.remove(tabId));
     return { closed: true };
   },
 
   // Raw CDP, scoped to the lane's own tab and nothing else.
   async cdp({ lane, method, params }) {
     const tabId = tabOf(lane);
+    if (ungrouped.has(tabId)) {
+      await groupIntoArgus(tabId).then(() => ungrouped.delete(tabId), () => {});
+    }
     await ensureAttached(tabId);
     return (await chrome.debugger.sendCommand({ tabId }, method, params || {})) ?? {};
   },

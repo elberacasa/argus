@@ -23,9 +23,15 @@ export interface LaneContext {
 }
 
 const QUIET_MS = 150;
-const SETTLE_MAX_MS = 3000;
+/** How long settling may take after an action, and after a navigation's document is ready. */
+const SETTLE_MAX_MS = 1500;
+const NAV_SETTLE_MAX_MS = 3000;
+/** How long a navigation may take to reach DOMContentLoaded. */
 const NAV_MAX_MS = 15_000;
 const LIST_LIMIT = 12;
+
+/** Where the last step spent its time, phase by phase. Read by benchmarks; free to record. */
+export const lastStepPhases: Array<[string, number]> = [];
 
 /** How a field is named in observations, the same for typed and page-filled values: role:name. */
 const fieldLabel = (e: SceneElement) => `${e.role}:${e.name || e.selector}`;
@@ -82,9 +88,14 @@ interface Performed {
 
 async function runStep(lane: LaneContext, step: Step, i: number, noErrorsByDefault: boolean): Promise<StepResult> {
   const t0 = performance.now();
+  lastStepPhases.length = 0;
+  let tp = t0;
+  const phase = (name: string) => { const now = performance.now(); lastStepPhases.push([name, Math.round(now - tp)]); tp = now; };
   const verb = verbOf(step);
   const before = await captureScene(lane.page);
+  phase("scene-before");
   const mark = await lane.probe.mark();
+  phase("mark");
   const navigationsBefore = lane.probe.navigations;
 
   let performed: Performed;
@@ -98,9 +109,11 @@ async function runStep(lane: LaneContext, step: Step, i: number, noErrorsByDefau
   let diagnosis = performed.diagnosis;
   let ok = performed.ok;
 
+  phase(`perform:${verb}`);
   if (ok) {
     const settled = await settle(lane, mark, navigationsBefore !== lane.probe.navigations || verb === "open");
     observation.settled = settled;
+    phase("settle");
 
     const expectation: Expectation | undefined = verb === "wait"
       ? (step as { wait: Expectation }).wait
@@ -121,7 +134,9 @@ async function runStep(lane: LaneContext, step: Step, i: number, noErrorsByDefau
     }
   }
 
+  phase("expect");
   const after = await captureScene(lane.page);
+  phase("scene-after");
   Object.assign(observation, describeChange(before, after, lane.probe.since(mark, LIST_LIMIT)));
   // A verb's own report (e.g. the files set by upload) wins over the scene diff.
   if (performed.fields?.length) observation.fields = performed.fields;
@@ -135,6 +150,7 @@ async function runStep(lane: LaneContext, step: Step, i: number, noErrorsByDefau
     if (!changed) observation.effect = "none";
   }
 
+  phase("effect");
   const result: StepResult = { i, verb, ok, observation };
   if (step.id) result.id = step.id;
   if (performed.target) result.target = publicElement(performed.target);
@@ -178,18 +194,36 @@ async function perform(lane: LaneContext, step: Step, verb: Verb, scene: Scene):
       const node = reached.element.backendNodeId;
       const from = await fieldValue(page, node);
       await page.send("DOM.focus", { backendNodeId: node });
-      await callOn(page, node, `function () {
+      const editable = await callOn(page, node, `function () {
         if ("value" in this) {
           const proto = Object.getPrototypeOf(this);
           const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
           setter ? setter.call(this, "") : (this.value = "");
           this.dispatchEvent(new Event("input", { bubbles: true }));
-        } else if (this.isContentEditable) { this.textContent = ""; }
+          return false;
+        }
+        return this.isContentEditable;
       }`);
-      await page.send("Input.insertText", { text });
+      // A rich editor (X, Slack, Notion...) keeps its own model of the text:
+      // overwriting its HTML breaks it. Clear and type the way a person does,
+      // with keys, and line breaks as Enter.
+      if (editable === true) {
+        if ((from ?? "").length > 0) {
+          await pressChord(page, "Control+a");
+          await pressChord(page, "Backspace");
+        }
+        const lines = text.split("\n");
+        for (let k = 0; k < lines.length; k++) {
+          if (k > 0) await pressChord(page, "Enter");
+          if (lines[k]) await page.send("Input.insertText", { text: lines[k]! });
+        }
+      } else {
+        await page.send("Input.insertText", { text });
+      }
       const to = await fieldValue(page, node);
       const fields: Observation["fields"] = from === to ? [] : [{ target: fieldLabel(reached.element), ...(from ? { from } : {}), to: to ?? "" }];
-      if (to !== text && !(to ?? "").includes(text)) {
+      const flat = (v: string) => v.replace(/\s+/g, " ").trim();
+      if (to !== text && !(to ?? "").includes(text) && flat(to ?? "") !== flat(text) && !flat(to ?? "").includes(flat(text))) {
         return {
           ok: false, target: reached.element, match: reached.match, fields, expectsEffect: false,
           diagnosis: {
@@ -430,32 +464,42 @@ function coveringElement(scene: Scene, hit: number): SceneElement | null {
 
 // ---- settle and expectations -------------------------------------------------
 
+/**
+ * Wait for the page to finish reacting: no DOM mutations and no request the
+ * step could have caused, for QUIET_MS. Streams, beacons and long-running
+ * background requests never count, and settling is capped: a page with a
+ * carousel or a live feed is never quiet, and an agent that needs a specific
+ * outcome says so with expect/within, which waits for exactly that.
+ */
 async function settle(lane: LaneContext, mark: Mark, navigated: boolean): Promise<{ quietMs: number; waitedMs: number } | "timeout"> {
   const t0 = performance.now();
-  const max = navigated ? NAV_MAX_MS : SETTLE_MAX_MS;
   if (navigated) {
     // A click that navigates: wait for the new document before judging quiet.
-    while (performance.now() - t0 < max) {
+    while (performance.now() - t0 < NAV_MAX_MS) {
       try {
         const { result } = await lane.page.send("Runtime.evaluate", { expression: "document.readyState", returnByValue: true });
-        if (result.value === "complete") break;
+        if (result.value === "interactive" || result.value === "complete") break;
       } catch { /* context swapping */ }
       await sleep(25);
     }
   }
+  const ready = performance.now();
+  const max = navigated ? NAV_SETTLE_MAX_MS : SETTLE_MAX_MS;
   let mutations = await lane.probe.mutations();
   let quietSince = performance.now();
-  while (performance.now() - t0 < max) {
+  let lastRequest = lane.probe.lastRequestStart;
+  while (performance.now() - ready < max) {
     await sleep(25);
     const now = await lane.probe.mutations();
-    if (now !== mutations || lane.probe.busyRequests > 0 || lane.probe.lastActivity > quietSince) {
+    const busy = lane.probe.busySince(mark.at);
+    if (now !== mutations || busy > 0 || lane.probe.lastRequestStart !== lastRequest) {
       mutations = now;
+      lastRequest = lane.probe.lastRequestStart;
       quietSince = performance.now();
       continue;
     }
     if (performance.now() - quietSince >= QUIET_MS) return { quietMs: QUIET_MS, waitedMs: Math.round(performance.now() - t0) };
   }
-  void mark;
   return "timeout";
 }
 

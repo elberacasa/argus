@@ -58,6 +58,35 @@ network activity and no DOM mutation for 150 ms before a step is judged.
 
 Reproduce: `cd argusd && bun test test/daemon.test.ts`.
 
+## Real sites
+
+`cd argusd && bun bench/speed.ts`: medians of three interleaved rounds per site
+in a throwaway lane, in milliseconds. "Browser to DOMContentLoaded" is the same
+browser navigating with no Argus work, the floor no tool can beat; the network
+varies between rounds, which is why both are measured interleaved.
+
+| Site | Browser to DOMContentLoaded | Argus open | of which settle | Outline | No-op step | Check | Screenshot |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| example.com | 531 | 591 | 155 | 2 | 157 | 2 | 21 |
+| news.ycombinator.com | 1,578 | 1,261 | 157 | 17 | 181 | 25 | 54 |
+| en.wikipedia.org (article) | 999 | 1,201 | 182 | 44 | 489 | 93 | 86 |
+| github.com (repository) | 2,534 | 2,789 | 567 | 36 | 225 | 65 | 102 |
+| youtube.com | 2,513 | 5,500 | 3,019 | 24 | 203 | 41 | 45 |
+
+**What changed to get here.** The first measurement of this table had YouTube
+at 19.0 s to open and 3.0 s for a step that does nothing, and an X page in the
+person's own browser at 21.8 s. Two causes: navigation waited for the `load`
+event (every image; 11.7 s on the Wikipedia article), and settling treated
+streaming video, beacons and every image or font request as the page still
+reacting, so a live page always ran to the 15 s limit. Now a navigation is
+ready at DOMContentLoaded, only fetches, XHRs and documents a step started
+count as busy (never for more than 5 s), DOM mutations are watched as before,
+and settling is capped at 3 s after a navigation and 1.5 s after an action.
+YouTube's remaining 3 s is real: it keeps building its feed in bursts until
+about 2.1 s after the document is ready. An agent that needs a specific
+outcome states it with `expect`, which waits for exactly that. UI Testing
+Playground stayed 10/10 with zero false successes after the change.
+
 ## Desks and nests
 
 | Operation | Time |

@@ -296,7 +296,10 @@ export class Page implements CdpPage {
   }
 
   async navigate(url: string, timeoutMs = 30_000): Promise<{ errorText?: string }> {
-    const loaded = this.browser.waitFor("Page.loadEventFired", (_, sessionId) => sessionId === this.sessionId, timeoutMs);
+    // The document is ready to act on at DOMContentLoaded; "load" waits for every
+    // image and subresource (measured: 11.7 s on a Wikipedia article). Settling
+    // afterwards covers what the page does next.
+    const loaded = this.browser.waitFor("Page.domContentEventFired", (_, sessionId) => sessionId === this.sessionId, timeoutMs);
     // Handled from the start: if the navigate command itself stalls, the load
     // wait times out first, and an unobserved rejection would end the daemon.
     const settled = loaded.then(() => null, (error: unknown) => error as Error);

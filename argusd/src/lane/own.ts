@@ -143,20 +143,28 @@ export class OwnPage implements CdpPage {
   }
 
   async navigate(url: string, timeoutMs = 30_000): Promise<{ errorText?: string }> {
-    let off = () => {};
-    const loaded = new Promise<boolean>((resolve) => {
-      const timer = setTimeout(() => { off(); resolve(false); }, timeoutMs);
-      off = this.on("Page.loadEventFired", () => { clearTimeout(timer); off(); resolve(true); });
-    });
     let errorText: string | undefined;
+    let loaderId: string | undefined;
     try {
-      ({ errorText } = await this.send("Page.navigate", { url }));
+      ({ errorText, loaderId } = await this.send("Page.navigate", { url }));
     } catch (error) {
-      off();
       return { errorText: error instanceof Error ? error.message : String(error) };
     }
-    if (errorText) { off(); return { errorText }; }
-    return (await loaded) ? {} : { errorText: `the page did not finish loading within ${timeoutMs}ms` };
+    if (errorText) return { errorText };
+    // Ready when the new document is interactive (DOMContentLoaded), read from
+    // the page itself: no dependence on which events this extension version
+    // forwards. A same-document navigation has no loaderId and is ready at once.
+    if (!loaderId) return {};
+    const t0 = performance.now();
+    while (performance.now() - t0 < timeoutMs) {
+      try {
+        const { result } = await this.send("Runtime.evaluate", { expression: "[document.readyState, location.href]", returnByValue: true });
+        const [state, href] = result.value as [string, string];
+        if ((state === "interactive" || state === "complete") && href !== "about:blank") return {};
+      } catch { /* the old document is going away */ }
+      await Bun.sleep(40);
+    }
+    return { errorText: `the page did not become ready within ${timeoutMs}ms` };
   }
 
   async info(): Promise<{ url: string; title: string }> {

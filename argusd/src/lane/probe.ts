@@ -19,7 +19,18 @@ const MUTATION_SCRIPT = `(() => {
 
 type Answer = "accept" | "dismiss";
 interface Entry<T> { seq: number; at: number; value: T }
-interface Request { method: string; url: string; started: number; status?: number }
+interface Request { method: string; url: string; started: number; status?: number; type?: string }
+
+/**
+ * Requests that mean the page is waiting for data: fetches, XHRs and documents.
+ * Images, fonts, styles, scripts and media do not make a page "busy" -- when
+ * they change what is shown, the DOM mutation count sees it -- and streams and
+ * beacons never finish by design.
+ */
+const REACTING = new Set(["XHR", "Fetch", "Document"]);
+const reacting = (type: string | undefined) => type === undefined || REACTING.has(type);
+/** A request still open after this long is background traffic (long polls, slow trackers), not the page reacting. */
+const BACKGROUND_AFTER_MS = 5_000;
 
 export interface Mark {
   seq: number;
@@ -61,6 +72,22 @@ export class Probe {
   }
 
   get busyRequests(): number { return this.inflight.size; }
+
+  /**
+   * Requests that mean the page is still reacting: started at or after a
+   * point, not streams or beacons, and not open long enough to be background
+   * traffic. A video that streams forever never counts.
+   */
+  busySince(atMs: number): number {
+    const now = performance.now();
+    let n = 0;
+    for (const r of this.inflight.values())
+      if (r.started >= atMs && reacting(r.type) && now - r.started < BACKGROUND_AFTER_MS) n++;
+    return n;
+  }
+
+  /** Time of the last request start that could mean the page is reacting (a fetch, XHR or document). */
+  lastRequestStart = 0;
 
   async mark(): Promise<Mark> {
     return { seq: this.seq, mutations: await this.mutations(), at: performance.now() };
@@ -137,9 +164,10 @@ export class Probe {
       this.push(this.exceptions, { message: message.slice(0, 500), ...(d.exception?.description ? { stack: d.exception.description.slice(0, 2000) } : {}) });
     });
 
-    page.on("Network.requestWillBeSent", ({ requestId, request }) => {
-      this.inflight.set(requestId, { method: request.method, url: request.url, started: performance.now() });
-      this.lastActivity = performance.now();
+    page.on("Network.requestWillBeSent", ({ requestId, request, type }) => {
+      const now = performance.now();
+      this.inflight.set(requestId, { method: request.method, url: request.url, started: now, ...(type ? { type } : {}) });
+      if (reacting(type)) this.lastRequestStart = now;
     });
     page.on("Network.responseReceived", ({ requestId, response }) => {
       const r = this.inflight.get(requestId);
