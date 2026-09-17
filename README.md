@@ -186,13 +186,13 @@ with `cd argusd && bun bench/h2h.ts --rounds 2`.
 waits for the label in the same call as the click. Claude in Chrome's session
 waited 18 s, then took three screenshots; two of them timed out after 30 s.
 
-<img src="docs/media/h2h-clientdelay.svg" alt="Client Side Delay, round 2: Argus made 2 calls in 23.7 s; Claude in Chrome made 10 calls in 134.4 s, including two screenshots that timed out" width="100%">
+<img src="docs/media/h2h-clientdelay.png" alt="Client Side Delay, round 2: Argus made 2 calls in 23.7 s; Claude in Chrome made 10 calls in 134.4 s, including two screenshots that timed out" width="100%">
 
 Knowing whether a click landed: Argus refuses the second click and names the
 button on top. Claude in Chrome's session added its own click listener with
 JavaScript and read it back. Both were right.
 
-<img src="docs/media/h2h-hiddenlayers.svg" alt="Hidden Layers, round 1: Argus reports the second click as covered by another button; Claude in Chrome verifies with an injected click listener" width="100%">
+<img src="docs/media/h2h-hiddenlayers.png" alt="Hidden Layers, round 1: Argus reports the second click as covered by another button; Claude in Chrome verifies with an injected click listener" width="100%">
 
 **Argus's own test pages** ([details](docs/benchmark.md)): ~1,880 tokens for
 Argus and ~5,540 for Claude in Chrome across the five tasks both attempted.

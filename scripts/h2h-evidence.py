@@ -11,7 +11,7 @@ transcript per session). This writes:
     docs/benchmarks/<name>/runs/*.md          every call, what came back, the images
     docs/benchmarks/<name>/runs/img/*         the images each model was shown
     docs/media/h2h.svg                        time per challenge, both rounds
-    docs/media/h2h-<challenge>.svg            two sessions side by side
+    docs/media/h2h-<challenge>.png            two sessions side by side (needs rsvg-convert)
 
 Everything shown is taken from the transcripts. Logs drop session metadata
 (settings, local paths) and system reminders a tool appends for the model;
@@ -286,7 +286,9 @@ def panel(ch, rd, headline):
     svg = (f'<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 {w} {h}" width="{w}" height="{h}" role="img">'
            f"<title>{escape(CHALLENGES[ch])}: Argus and Claude in Chrome sessions side by side</title>"
            f'<rect x="0.5" y="0.5" width="{w - 1}" height="{h - 1:.0f}" rx="18" fill="{BG}" stroke="{EDGE}"/>' + "".join(body) + "</svg>\n")
-    (MEDIA / f"h2h-{ch}.svg").write_text(svg)
+    # As PNG: GitHub serves SVGs with a policy that blocks the embedded images.
+    import subprocess
+    subprocess.run(["rsvg-convert", "--zoom", "2", "-o", str(MEDIA / f"h2h-{ch}.png")], input=svg.encode(), check=True)
 
 
 def write_index(rows):
@@ -326,4 +328,4 @@ if __name__ == "__main__":
     chart(rows)
     panel("clientdelay", 2, "waiting for a slow page")
     panel("hiddenlayers", 1, "knowing whether a click landed")
-    print(f"wrote {OUT.relative_to(ROOT)} and docs/media/h2h*.svg")
+    print(f"wrote {OUT.relative_to(ROOT)}, docs/media/h2h.svg and the h2h-*.png panels")
