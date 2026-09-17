@@ -179,6 +179,7 @@ function choose(scene: Scene, found: SceneElement[], match: Match, t: TargetObje
     diagnosis: {
       reason: "ambiguous",
       hint: `${pool.length} elements match ${describeTarget(target)}${match === "exact" ? "" : ` (${match} match)`}; pass one of their refs, nth, or near.`,
+      count: pool.length,
       candidates: pool.slice(0, 8).map((e) => publicElement(e)),
     },
   };

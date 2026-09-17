@@ -109,8 +109,10 @@ export class Service {
           const scene = await captureScene(lane.page);
           const found = await locateOn(lane.page, scene, params.target as Target);
           if (found.ok) return { matches: [publicElement(found.element)], match: found.match };
-          if (found.diagnosis.reason === "ambiguous")
-            return { matches: (found.diagnosis.candidates ?? []).slice(0, (params.limit as number | undefined) ?? 8), match: "exact" };
+          if (found.diagnosis.reason === "ambiguous") {
+            const limit = (params.limit as number | undefined) ?? 8;
+            return { matches: (found.diagnosis.candidates ?? []).slice(0, limit), match: "exact", total: found.diagnosis.count ?? (found.diagnosis.candidates ?? []).length };
+          }
           return { matches: [], match: "none", near: found.diagnosis.didYouMean ?? [], hint: found.diagnosis.hint };
         });
 
@@ -125,6 +127,7 @@ export class Service {
         });
 
       case "check":
+        if (Array.isArray(params.viewports)) return this.checkAcross(params as { lane: string; viewports: Viewport[]; only?: Category[] });
         return this.lanes.withLane(params.lane as string, async (lane) => {
           const scene = await captureScene(lane.page);
           let within: number | undefined;
@@ -206,6 +209,27 @@ export class Service {
   }
 
   /** One script across conditions, in parallel lanes. */
+  /**
+   * The same audit at several sizes, in parallel lanes: what a responsive
+   * review needs. A finding that only appears on a phone is the point, and it
+   * is invisible when each size is looked at on its own.
+   */
+  private async checkAcross(params: { lane: string; viewports: Viewport[]; only?: Category[] }) {
+    const url = await this.lanes.withLane(params.lane, async (lane) => (await captureScene(lane.page)).url);
+    const across = await Promise.all(params.viewports.map(async (viewport) => {
+      const opened = await this.lanes.open({ kind: "throwaway", viewport, url });
+      try {
+        const lane = this.lanes.get(opened.lane);
+        const scene = await captureScene(lane.page);
+        const r = await check(lane.page, lane.probe, lane.openMark, scene, { ...(params.only ? { only: params.only } : {}) });
+        return { viewport, score: r.score, scanned: r.scanned, findings: r.findings };
+      } finally {
+        await this.lanes.close(opened.lane).catch(() => {});
+      }
+    }));
+    return { across };
+  }
+
   private async sweep(params: { name: string; steps: Step[]; across: { viewports?: Viewport[]; colorScheme?: Array<"light" | "dark"> } }) {
     const t0 = performance.now();
     const viewports = params.across.viewports ?? [{ w: 1280, h: 800 }];

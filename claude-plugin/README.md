@@ -27,6 +27,10 @@ for the daemon, desks and the browser extension.
 
 **Skills** (also slash commands):
 
+- `/argus:setup` — write the project rule that sends browser work to Argus, and
+  check the daemon answers. Run this once per project: without it an agent may
+  reach for whatever browser tool it has.
+
 - `/argus:ui-review <url>` — accessibility, layout and runtime problems, with
   the element and the measured value for each, and a sweep across viewports.
 - `/argus:browser-test <what>` — drive a flow with every step verified, and a

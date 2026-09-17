@@ -15,9 +15,13 @@ usually runs on localhost).
    missing alt text, heading order, duplicate ids, horizontal overflow, tiny
    text, console errors, exceptions and failed or slow requests. Report what it
    finds; do not guess at problems it did not report.
-3. For anything that depends on size, `browser_sweep` the same steps across
-   viewports (390x844 and 1280x800 by default). A button covered only on phones
-   is the classic case, and only a sweep shows it.
+3. For anything that depends on size, pass `viewports` to `browser_check`:
+   `{"viewports": [{"w": 390, "h": 844}, {"w": 1280, "h": 800}]}` audits the
+   page at each size in parallel and says which rules differ and which elements
+   fail at one size only. A control that is only covered or too small on a
+   phone is the classic case, and only this shows it. (`browser_sweep` runs
+   *steps* across sizes and reports which conditions fail an expectation; use
+   it for flows, not for audits.)
 4. `browser_look` at the element behind a finding when a picture helps a person
    decide. Crops cost image tokens and the result says how many; a whole
    screenshot is 1,334, so prefer a crop or the text.

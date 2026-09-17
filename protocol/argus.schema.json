@@ -360,6 +360,7 @@
         "hint": { "type": "string", "minLength": 1 },
         "didYouMean": { "type": "array", "items": { "$ref": "#/$defs/Element" } },
         "candidates": { "type": "array", "items": { "$ref": "#/$defs/Element" } },
+        "count": { "type": "integer", "minimum": 0, "description": "How many elements matched, when candidates lists only some of them." },
         "blocker": { "$ref": "#/$defs/Element" },
         "why": { "enum": ["display", "visibility", "opacity", "inert", "aria-hidden"] },
         "scrollable": { "type": "boolean" },
@@ -459,12 +460,26 @@
         }
       },
       "check": {
-        "type": "object", "required": ["score", "findings", "scanned"],
+        "type": "object",
+        "oneOf": [{ "required": ["score", "findings", "scanned"] }, { "required": ["across"] }],
         "properties": {
           "score": { "type": "integer", "minimum": 0, "maximum": 100 },
           "findings": { "type": "array", "items": { "$ref": "#/$defs/Finding" } },
           "scanned": { "type": "integer", "minimum": 0 },
-          "tokensEst": { "type": "integer", "minimum": 0 }
+          "tokensEst": { "type": "integer", "minimum": 0 },
+          "across": {
+            "type": "array",
+            "description": "One result per viewport, when several were asked for.",
+            "items": {
+              "type": "object", "required": ["viewport", "score", "findings", "scanned"],
+              "properties": {
+                "viewport": { "$ref": "#/$defs/Viewport" },
+                "score": { "type": "integer", "minimum": 0, "maximum": 100 },
+                "findings": { "type": "array", "items": { "$ref": "#/$defs/Finding" } },
+                "scanned": { "type": "integer", "minimum": 0 }
+              }
+            }
+          }
         }
       },
       "run": {

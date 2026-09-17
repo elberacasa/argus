@@ -17,7 +17,7 @@ import { ArgusError } from "../rpc/client";
 import { connect } from "../rpc/connect";
 import { Omarchy } from "../os/omarchy";
 import type { ActResult } from "../protocol/types";
-import { renderAct, renderCheck, renderFind, renderObservation, renderRun, renderSweep } from "../render/text";
+import { renderAct, renderCheck, renderCheckAcross, renderFind, renderObservation, renderRun, renderSweep } from "../render/text";
 
 type Content = { type: "text"; text: string } | { type: "image"; data: string; mimeType: string };
 interface ToolResult { content: Content[]; isError?: boolean }
@@ -57,8 +57,8 @@ const TOOLS = [
     inputSchema: { type: "object", properties: { lane, budget: { type: "integer", description: "Token budget, default 250" } } } },
   { name: "browser_find", description: "Find elements by target, including inside frames and shadow roots. Returns refs, positions and states, or near matches.",
     inputSchema: { type: "object", properties: { target, lane }, required: ["target"] } },
-  { name: "browser_check", description: "What is wrong with the page: WCAG contrast with measured ratios, tap targets under 24px, unnamed controls, missing alt, heading order, duplicate ids, horizontal overflow, tiny text, console errors, exceptions, failed and slow requests. Includes frames and shadow roots.",
-    inputSchema: { type: "object", properties: { lane, only: { type: "array", items: { enum: ["a11y", "layout", "runtime", "perf"] } } } } },
+  { name: "browser_check", description: "What is wrong with the page: WCAG contrast with measured ratios, tap targets under 24px, unnamed controls, missing alt, heading order, duplicate ids, horizontal overflow, tiny text, console errors, exceptions, failed and slow requests. Includes frames and shadow roots. Pass viewports to audit the same page at several sizes at once and see what only fails on a phone.",
+    inputSchema: { type: "object", properties: { lane, only: { type: "array", items: { enum: ["a11y", "layout", "runtime", "perf"] } }, viewports: { type: "array", description: '[{"w":390,"h":844},{"w":1280,"h":800}]', items: { type: "object", properties: { w: { type: "integer" }, h: { type: "integer" } } } } } } },
   { name: "browser_look", description: "See one element (covered or disabled ones too) as a cropped image, or the viewport if no target. Returns the image and its cost in image tokens.",
     inputSchema: { type: "object", properties: { target, lane } } },
   { name: "browser_screenshot", description: "A screenshot of the viewport (1280x800 costs 1,334 image tokens), or the full page. Prefer browser_look or text results when they answer the question.",
@@ -174,7 +174,10 @@ export class McpServer {
         const c = await this.daemon();
         if (name === "browser_outline") return text((await c.call<{ outline: string }>("scene.outline", { lane: l.id, ...(args.budget ? { budget: args.budget } : {}) })).outline);
         if (name === "browser_find") return text(renderFind(await c.call("scene.find", { lane: l.id, target: args.target })));
-        if (name === "browser_check") return text(renderCheck(await c.call("check", { lane: l.id, ...(args.only ? { only: args.only } : {}) })));
+        if (name === "browser_check") {
+          const r = await c.call<{ across?: unknown[] }>("check", { lane: l.id, ...(args.only ? { only: args.only } : {}), ...(args.viewports ? { viewports: args.viewports } : {}) });
+          return text(r.across ? renderCheckAcross(r as never) : renderCheck(r as never));
+        }
         if (name === "browser_trace") {
           const { entries } = await c.call<{ entries: Array<{ id: string; method: string; ok: boolean; ms: number; at: string }> }>("trace.list", { lane: l.id, limit: (args.limit as number) ?? 20 });
           return text(entries.map((e) => `${e.at.slice(11, 19)} ${e.ok ? "✓" : "✗"} ${e.method} ${e.ms}ms ${e.id}`).join("\n") || "(nothing yet)");

@@ -69,17 +69,48 @@ export function renderCheck(r: { score: number; scanned: number; findings: Array
   const lines = [`score ${r.score}/100 · ${r.findings.length} finding(s) · ${r.scanned} elements`];
   for (const f of r.findings) {
     lines.push(`${f.severity === "error" ? "✗" : "!"} ${f.rule} ×${f.count}  ${f.hint}`);
-    for (const e of f.examples.slice(0, 3)) {
+    for (const e of f.examples) {
       const detail = e.detail && typeof e.detail === "object"
         ? Object.entries(e.detail as Record<string, unknown>).filter(([, v]) => v !== undefined).map(([k, v]) => `${k} ${v}`).join(", ")
         : "";
       lines.push(`    ${[e.ref, e.text ? q(e.text) : "", detail].filter(Boolean).join("  ")}`);
     }
+    if (f.count > f.examples.length) lines.push(`    … ${f.count - f.examples.length} more like this`);
   }
   return lines.join("\n");
 }
 
-export function renderFind(r: { matches: Element[]; match: string; near?: Element[]; hint?: string }): string {
+type CheckResult = { score: number; scanned: number; findings: Array<{ rule: string; severity: string; hint: string; count: number; examples: Array<{ ref?: string; text?: string; detail?: unknown }> }> };
+
+/** The same page at several sizes: each result, then the rules that differ. */
+export function renderCheckAcross(r: { across: Array<CheckResult & { viewport: { w: number; h: number } }> }): string {
+  const size = (v: { w: number; h: number }) => `${v.w}x${v.h}`;
+  const lines: string[] = [];
+  for (const one of r.across) lines.push(`${size(one.viewport)}  ${renderCheck(one).replace(/\n/g, "\n  ")}`, "");
+  const rules = [...new Set(r.across.flatMap((a) => a.findings.map((f) => f.rule)))];
+  const differs = rules.filter((rule) => new Set(r.across.map((a) => a.findings.find((f) => f.rule === rule)?.count ?? 0)).size > 1);
+  if (!differs.length) {
+    lines.push(r.across.length > 1 ? "same findings at every size" : "");
+    return lines.join("\n").trim();
+  }
+  lines.push("differs by size:");
+  for (const rule of differs) {
+    const counts = r.across.map((a) => `${a.findings.find((f) => f.rule === rule)?.count ?? 0} at ${size(a.viewport)}`).join(", ");
+    lines.push(`  ${rule}: ${counts}`);
+    // The elements that only fail at one size are what a responsive review is for.
+    const refsAt = r.across.map((a) => new Set((a.findings.find((f) => f.rule === rule)?.examples ?? []).map((e) => e.ref).filter(Boolean) as string[]));
+    for (const [i, refs] of refsAt.entries()) {
+      const only = [...refs].filter((ref) => refsAt.every((other, j) => j === i || !other.has(ref)));
+      if (only.length && refsAt.length > 1) lines.push(`    only at ${size(r.across[i]!.viewport)}: ${only.join(", ")}`);
+    }
+  }
+  return lines.join("\n").trim();
+}
+
+export function renderFind(r: { matches: Element[]; match: string; near?: Element[]; hint?: string; total?: number }): string {
   if (!r.matches.length) return [r.hint ?? "no match", ...(r.near?.length ? [`did you mean: ${r.near.map(who).join(" · ")}`] : [])].join("\n");
-  return r.matches.map((e) => `${who(e)}${e.bounds ? ` @${e.bounds.x},${e.bounds.y} ${e.bounds.w}x${e.bounds.h}` : ""}${e.state?.length ? ` [${e.state.join(", ")}]` : ""}`).join("\n");
+  const lines = r.matches.map((e) => `${who(e)}${e.bounds ? ` @${e.bounds.x},${e.bounds.y} ${e.bounds.w}x${e.bounds.h}` : ""}${e.state?.length ? ` [${e.state.join(", ")}]` : ""}`);
+  // A silent cap reads as "the page has this many"; say what was left out.
+  if (r.total !== undefined && r.total > r.matches.length) lines.push(`(showing ${r.matches.length} of ${r.total})`);
+  return lines.join("\n");
 }

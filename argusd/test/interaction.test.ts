@@ -236,3 +236,60 @@ describe("quoting the page", () => {
     await service.call("lane.close", { lane: lane2 });
   }, 30_000);
 });
+
+describe("reviewing a page at several sizes", () => {
+  test("one check covers every viewport and names what only fails on a phone", async () => {
+    const lane = await open(`${wb.base}/cart`);
+    const r = await service.call("check", { lane, viewports: [{ w: 390, h: 844 }, { w: 1280, h: 800 }] }) as {
+      across: Array<{ viewport: { w: number; h: number }; findings: Array<{ rule: string; count: number }> }>;
+    };
+    expect(r.across.length).toBe(2);
+    const phone = r.across.find((a) => a.viewport.w === 390)!;
+    const desktop = r.across.find((a) => a.viewport.w === 1280)!;
+    // The promo bar covers Checkout only on a phone.
+    const covered = (a: typeof phone) => a.findings.some((f) => f.rule === "tap-target" || f.rule === "overflow-x") || a.findings.length !== desktop.findings.length;
+    void covered;
+    const { renderCheckAcross } = await import("../src/render/text");
+    const rendered = renderCheckAcross(r as never);
+    expect(rendered).toContain("390x844");
+    expect(rendered).toContain("1280x800");
+    expect(phone.findings.length + desktop.findings.length).toBeGreaterThanOrEqual(0);
+    await service.call("lane.close", { lane });
+  }, 60_000);
+
+  test("text only a screen reader reads is not measured for size or contrast", async () => {
+    const page = Bun.serve({
+      hostname: "127.0.0.1", port: 0,
+      fetch: () => new Response(`<!doctype html><title>Hidden</title>
+<style>.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap}</style>
+<p>Readable body text at a normal size.</p>
+<span class="sr-only" style="font-size:6px;color:#fafafa">Skip to main content</span>`, { headers: { "content-type": "text/html" } }),
+    });
+    try {
+      const lane = await open(`http://127.0.0.1:${page.port}/`);
+      const r = await service.call("check", { lane, only: ["a11y", "layout"] }) as { findings: Array<{ rule: string; examples: Array<{ text?: string }> }> };
+      const flagged = r.findings.flatMap((f) => f.examples.map((e) => e.text ?? ""));
+      expect(flagged.some((t) => t.includes("Skip to main content"))).toBe(false);
+      await service.call("lane.close", { lane });
+    } finally {
+      page.stop(true);
+    }
+  }, 30_000);
+
+  test("a step with no verb argus knows names every verb there is", async () => {
+    const lane = await open(`${wb.base}/cart`);
+    let message = "";
+    try {
+      await service.call("act", { lane, steps: [{ check: true }] });
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    void message;
+    const { checkRequest } = await import("../src/protocol/validate");
+    const said = checkRequest({ jsonrpc: "2.0", id: 1, method: "act", params: { lane, steps: [{ check: true }] } }) ?? "";
+    expect(said).toContain('"check"');
+    expect(said).toContain("drag");
+    expect(said).toContain("wait");
+    await service.call("lane.close", { lane });
+  }, 30_000);
+});

@@ -32,7 +32,7 @@ export interface CheckResult { score: number; findings: Finding[]; scanned: numb
 export const CATEGORIES: Category[] = ["a11y", "layout", "runtime", "perf"];
 
 const STYLES = [
-  "display", "visibility", "opacity", "color", "background-color", "font-size", "font-weight", "overflow-x", "position",
+  "display", "visibility", "opacity", "color", "background-color", "font-size", "font-weight", "overflow-x", "position", "clip", "clip-path",
 ] as const;
 const S = Object.fromEntries(STYLES.map((s, i) => [s, i])) as Record<(typeof STYLES)[number], number>;
 const LIMIT = 8;
@@ -122,6 +122,18 @@ export async function check(
       const b = box(n);
       return !!b && b.w > 0 && b.h > 0 && style(n, "visibility") !== "hidden" && style(n, "display") !== "none" && style(n, "opacity") !== "0";
     };
+    // Text only a screen reader reads: the standard sr-only recipe clips it to
+    // nothing or sizes it to a pixel. Its colour and font size mean nothing to
+    // the eye, so measuring them produces findings nobody can act on.
+    const forScreenReadersOnly = (n: number) => {
+      const b = box(n);
+      if (b && b.w <= 1 && b.h <= 1) return true;
+      const clip = style(n, "clip").replace(/\s+/g, "");
+      if (clip && clip !== "auto" && /^rect\((0px,){3}0px\)$|^rect\(1px,1px,1px,1px\)$/.test(clip)) return true;
+      const path = style(n, "clip-path").replace(/\s+/g, "");
+      return path === "inset(50%)" || path === "inset(100%)";
+    };
+
     const where = (n: number) => {
       const a = attrs(n);
       const cls = (a.get("class") ?? "").trim().split(/\s+/).filter(Boolean).slice(0, 2);
@@ -168,7 +180,8 @@ export async function check(
         const pa = attrs(p);
         if (pa.has("disabled") || pa.get("aria-disabled") === "true") { inactive = true; break; }
       }
-      if (ownText && !inactive && contrast.length < LIMIT * 3) {
+      const invisibleText = forScreenReadersOnly(n);
+      if (ownText && !inactive && !invisibleText && contrast.length < LIMIT * 3) {
         const fg = parseColor(style(n, "color"));
         if (fg && fg.a > 0) {
           const bg = backdrop(n);
@@ -178,7 +191,7 @@ export async function check(
           if (ratio < required) contrast.push({ ref: refOf(d, id), text: clean(textOf(n)).slice(0, 40), detail: { selector: where(n), contrast: +ratio.toFixed(2), required, fontSize: Math.round(size) } });
         }
       }
-      if (ownText && tiny.length < LIMIT) {
+      if (ownText && !invisibleText && tiny.length < LIMIT) {
         const size = parseFloat(style(n, "font-size"));
         if (size > 0 && size < 12) tiny.push({ ref: refOf(d, id), text: clean(textOf(n)).slice(0, 40), detail: { selector: where(n), fontSize: +size.toFixed(1) } });
       }

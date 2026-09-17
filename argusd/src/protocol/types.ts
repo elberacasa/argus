@@ -84,6 +84,8 @@ export type DiagnosisReason =
   | "expectation-failed" | "timeout" | "navigation-failed" | "dialog-blocked" | "forbidden" | "probe-error";
 
 export interface Diagnosis {
+  /** How many elements matched, when only some are listed. */
+  count?: number;
   reason: DiagnosisReason;
   hint: string;
   didYouMean?: Element[];
