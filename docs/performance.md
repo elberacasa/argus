@@ -62,30 +62,62 @@ Reproduce: `cd argusd && bun test test/daemon.test.ts`.
 
 `cd argusd && bun bench/speed.ts`: medians of three interleaved rounds per site
 in a throwaway lane, in milliseconds. "Browser to DOMContentLoaded" is the same
-browser navigating with no Argus work, the floor no tool can beat; the network
-varies between rounds, which is why both are measured interleaved.
+browser navigating with no Argus work, the floor no tool can beat. The network
+swings between runs (Wikipedia's own load went from 1.0 s to 6.1 s between two
+runs an hour apart), which is why both columns are measured interleaved.
 
 | Site | Browser to DOMContentLoaded | Argus open | of which settle | Outline | No-op step | Check | Screenshot |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| example.com | 531 | 591 | 155 | 2 | 157 | 2 | 21 |
-| news.ycombinator.com | 1,578 | 1,261 | 157 | 17 | 181 | 25 | 54 |
-| en.wikipedia.org (article) | 999 | 1,201 | 182 | 44 | 489 | 93 | 86 |
-| github.com (repository) | 2,534 | 2,789 | 567 | 36 | 225 | 65 | 102 |
-| youtube.com | 2,513 | 5,500 | 3,019 | 24 | 203 | 41 | 45 |
+| example.com | 829 | 592 | 157 | 1 | 158 | 3 | 16 |
+| news.ycombinator.com | 2,165 | 1,109 | 155 | 20 | 180 | 26 | 54 |
+| en.wikipedia.org (article) | 6,052 | 6,987 | 1,279 | 48 | 246 | 95 | 49 |
+| github.com (repository) | 2,739 | 5,231 | 1,773 | 33 | 223 | 67 | 89 |
+| youtube.com | 2,549 | 6,953 | 4,015 | 22 | 196 | 40 | 43 |
 
-**What changed to get here.** The first measurement of this table had YouTube
-at 19.0 s to open and 3.0 s for a step that does nothing, and an X page in the
-person's own browser at 21.8 s. Two causes: navigation waited for the `load`
-event (every image; 11.7 s on the Wikipedia article), and settling treated
-streaming video, beacons and every image or font request as the page still
-reacting, so a live page always ran to the 15 s limit. Now a navigation is
-ready at DOMContentLoaded, only fetches, XHRs and documents a step started
-count as busy (never for more than 5 s), DOM mutations are watched as before,
-and settling is capped at 3 s after a navigation and 1.5 s after an action.
-YouTube's remaining 3 s is real: it keeps building its feed in bursts until
-about 2.1 s after the document is ready. An agent that needs a specific
-outcome states it with `expect`, which waits for exactly that. UI Testing
-Playground stayed 10/10 with zero false successes after the change.
+## Real tasks
+
+`cd argusd && bun bench/flows.ts`: whole tasks, each ending in an expectation
+that only holds if the task happened. Medians of three rounds; every round of
+every flow passed.
+
+| Task | Steps | Total | Slowest step, and why |
+|---|---|---:|---|
+| Hacker News: open, go to "new" | open, click | 1,751 | the click, 468: the browser alone takes a median 497 from click to DOMContentLoaded |
+| Wikipedia: search for an article | open, type, Enter | 5,212 | Enter, 2,090: the article loads |
+| GitHub: repository to its issues | open, click | 12,011 | open, 9,842: GitHub took 8.8 s to return the document that run |
+| DuckDuckGo: search | open, type, Enter | 9,424 | Enter, 4,802: results arrive in a script that finishes about 4.4 s after the key |
+
+**Where the time goes.** In every step, Argus's own work (scene before and
+after, locating, the hit test, the input events) adds 30 to 150 ms. The rest is
+the page: the step waits until what it caused has finished, so the result
+describes the page the agent will act on next.
+
+**What an earlier version got wrong, and what fixing it cost.** Settling first
+ignored script and stylesheet requests and capped waiting at 1.5 s. That was
+fast and wrong on modern apps. A click on GitHub's "Issues" pushes the new URL
+at about 0.5 s, then loads the code for the issues view and renders it at 2 to
+4 s. Argus reported the click at 0.9 s with the old page still on screen, in 2
+of 2 runs. On DuckDuckGo, Enter was reported at 0.55 s, before the results page
+had arrived. Now scripts and styles a step started count as the page reacting,
+and while any request a step started is still loading, the cap extends up to
+6 s. The GitHub click reports the issues page (title and content) whenever
+GitHub renders it within that time; the Hacker News click is unchanged. A
+regression test reproduces the pattern: a router that fetches, pushes the URL,
+then loads its view's code for 3.5 s.
+
+**What changed before that.** The first measurement had YouTube at 19.0 s to
+open and 3.0 s for a step that does nothing, and an X page in the person's own
+browser at 21.8 s. Navigation waited for the `load` event (every image; 11.7 s
+on the Wikipedia article), and settling treated streaming video, beacons, images
+and fonts as the page still reacting, so a live page always ran to the 15 s
+limit. Now a navigation is ready at DOMContentLoaded, streams, beacons, images
+and fonts never count, and requests open for more than 5 s are background
+traffic.
+
+**Calling Argus from a shell.** Each `argus` command is a new process: about
+85 ms per call on this machine, of which the daemon's work on an outline or a
+check is about 10 ms. The first command also starts the daemon and its
+browser: 610 ms.
 
 ## Desks and nests
 

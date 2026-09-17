@@ -39,6 +39,13 @@ beforeAll(async () => {
       if (pathname === "/hang") return new Promise<Response>((resolve) => setTimeout(() => resolve(new Response("late")), 40_000));
       if (pathname === "/overflow") return new Response(Bun.file(join(REPO, "test/overflow.html")), { headers: { "content-type": "text/html" } });
       if (pathname === "/quiet") return new Response("<title>Quiet</title><h1>Quiet page</h1><button>Nothing</button>", { headers: { "content-type": "text/html" } });
+      // A client-side router the way GitHub's is: the click fetches, pushes the
+      // URL, then loads the code for the next view slowly and renders it.
+      if (pathname === "/spa") return new Response(`<title>Repo</title><h1>Repo</h1><a href="/spa/issues" id="go">Issues</a><main id="view">Code</main>
+<script>go.onclick = async (e) => { e.preventDefault(); await fetch("/api/view"); history.pushState({}, "", "/spa/issues");
+  await new Promise((r) => setTimeout(r, 50)); const s = document.createElement("script"); s.src = "/view.js"; document.head.append(s); };</script>`, { headers: { "content-type": "text/html" } });
+      if (pathname === "/api/view") return new Response("{}");
+      if (pathname === "/view.js") return new Promise((resolve) => setTimeout(() => resolve(new Response('document.title = "Issues"; view.textContent = "Open issues list";', { headers: { "content-type": "text/javascript" } })), 3500));
       return new Response("not found", { status: 404 });
     },
   });
@@ -259,6 +266,17 @@ describe("reach", () => {
     expect(d.hint).toContain("centre is covered");
     const fixed = await act(lane, [{ scroll: "textbox:Last" }, { type: ["textbox:Last", "Lovelace"], expect: { field: ["textbox:Last", "Lovelace"] } }]);
     expect(fixed.ok).toBe(true);
+  }, 30_000);
+
+  test("a client-side navigation is reported once the new view renders, not when the URL changes", async () => {
+    const lane = await openLane(`${base}/spa`);
+    const r = await act(lane, [{ click: "link:Issues" }]);
+    expect(r.ok).toBe(true);
+    const o = r.steps[0]!.observation;
+    expect(o.url?.to).toBe(`${base}/spa/issues`);
+    expect(o.title?.to).toBe("Issues");
+    expect(o.added).toContain("Open issues list");
+    await client.call("lane.close", { lane });
   }, 30_000);
 
   test("hit tests stay true on a scrolled page (getNodeForLocation takes document coordinates)", async () => {

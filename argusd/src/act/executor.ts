@@ -26,6 +26,8 @@ const QUIET_MS = 150;
 /** How long settling may take after an action, and after a navigation's document is ready. */
 const SETTLE_MAX_MS = 1500;
 const NAV_SETTLE_MAX_MS = 3000;
+/** How long requests a step started may keep it settling past those caps. */
+const SETTLE_HARD_MAX_MS = 6000;
 /** How long a navigation may take to reach DOMContentLoaded. */
 const NAV_MAX_MS = 15_000;
 const LIST_LIMIT = 12;
@@ -465,11 +467,11 @@ function coveringElement(scene: Scene, hit: number): SceneElement | null {
 // ---- settle and expectations -------------------------------------------------
 
 /**
- * Wait for the page to finish reacting: no DOM mutations and no request the
- * step could have caused, for QUIET_MS. Streams, beacons and long-running
- * background requests never count, and settling is capped: a page with a
- * carousel or a live feed is never quiet, and an agent that needs a specific
- * outcome says so with expect/within, which waits for exactly that.
+ * Wait for the page to finish reacting: no DOM mutations, no request the step
+ * could have caused and no navigation, for QUIET_MS. Streams, beacons, images
+ * and long-running background requests never count. Settling is capped: a page
+ * with a carousel or a live feed is never quiet, and an agent that needs a
+ * specific outcome says so with expect/within, which waits for exactly that.
  */
 async function settle(lane: LaneContext, mark: Mark, navigated: boolean): Promise<{ quietMs: number; waitedMs: number } | "timeout"> {
   const t0 = performance.now();
@@ -484,17 +486,30 @@ async function settle(lane: LaneContext, mark: Mark, navigated: boolean): Promis
     }
   }
   const ready = performance.now();
-  const max = navigated ? NAV_SETTLE_MAX_MS : SETTLE_MAX_MS;
+  const navigationsAtStart = lane.probe.navigations;
   let mutations = await lane.probe.mutations();
   let quietSince = performance.now();
   let lastRequest = lane.probe.lastRequestStart;
-  while (performance.now() - ready < max) {
+  let navigations = lane.probe.navigations;
+  for (;;) {
+    // A step that turns into a navigation later -- a client-side router
+    // pushing a new URL half a second after the click -- gets a navigation's
+    // allowance, measured from when it began.
+    const max = navigated || lane.probe.navigations !== navigationsAtStart ? NAV_SETTLE_MAX_MS : SETTLE_MAX_MS;
+    // The cap is for pages that never go quiet on their own (carousels, live
+    // feeds): DOM churn, not waiting. While requests the step started are
+    // still loading, the page is visibly not done -- GitHub is still fetching
+    // the code for the view it is about to show -- so wait for them, up to a
+    // hard ceiling.
+    const elapsed = performance.now() - ready;
+    if (elapsed >= SETTLE_HARD_MAX_MS || (elapsed >= max && lane.probe.busySince(mark.at) === 0)) break;
     await sleep(25);
     const now = await lane.probe.mutations();
     const busy = lane.probe.busySince(mark.at);
-    if (now !== mutations || busy > 0 || lane.probe.lastRequestStart !== lastRequest) {
+    if (now !== mutations || busy > 0 || lane.probe.lastRequestStart !== lastRequest || lane.probe.navigations !== navigations) {
       mutations = now;
       lastRequest = lane.probe.lastRequestStart;
+      navigations = lane.probe.navigations;
       quietSince = performance.now();
       continue;
     }

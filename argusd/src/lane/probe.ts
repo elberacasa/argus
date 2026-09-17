@@ -22,12 +22,13 @@ interface Entry<T> { seq: number; at: number; value: T }
 interface Request { method: string; url: string; started: number; status?: number; type?: string }
 
 /**
- * Requests that mean the page is waiting for data: fetches, XHRs and documents.
- * Images, fonts, styles, scripts and media do not make a page "busy" -- when
- * they change what is shown, the DOM mutation count sees it -- and streams and
+ * Requests that mean the page is still reacting: data (fetches, XHRs,
+ * documents) and code (scripts, styles), since an app loads the code for its
+ * next view before it renders it. Images, fonts and media do not -- when they
+ * change what is shown, the DOM mutation count sees it -- and streams and
  * beacons never finish by design.
  */
-const REACTING = new Set(["XHR", "Fetch", "Document"]);
+const REACTING = new Set(["XHR", "Fetch", "Document", "Script", "Stylesheet"]);
 const reacting = (type: string | undefined) => type === undefined || REACTING.has(type);
 /** A request still open after this long is background traffic (long polls, slow trackers), not the page reacting. */
 const BACKGROUND_AFTER_MS = 5_000;
@@ -42,7 +43,7 @@ export class Probe {
   private seq = 0;
   private readonly console: Entry<NonNullable<Observation["console"]>[number]>[] = [];
   private readonly exceptions: Entry<NonNullable<Observation["exceptions"]>[number]>[] = [];
-  private readonly network: Entry<NonNullable<Observation["network"]>[number] & { ok: boolean }>[] = [];
+  private readonly network: Entry<NonNullable<Observation["network"]>[number] & { ok: boolean; started: number }>[] = [];
   private readonly dialogs: Entry<NonNullable<Observation["dialogs"]>[number]>[] = [];
   private readonly inflight = new Map<string, Request>();
   private worldContext: number | null = null;
@@ -116,7 +117,9 @@ export class Probe {
     const exceptions = after(this.exceptions);
     if (exceptions.length) out.exceptions = exceptions.slice(-limit);
     // Only failed or slow requests: forty successful asset loads bury the one 500.
-    const network = after(this.network).filter((r) => !r.ok || (r.ms ?? 0) > 1000).map(({ ok: _ok, ...r }) => r);
+    // And only requests this step started: a slow image from the previous page
+    // finishing now is not something the step did.
+    const network = after(this.network).filter((r) => r.started >= mark.at && (!r.ok || (r.ms ?? 0) > 1000)).map(({ ok: _ok, started: _s, ...r }) => r);
     if (network.length) out.network = network.slice(-limit);
     const dialogs = after(this.dialogs);
     if (dialogs.length) out.dialogs = dialogs.slice(-limit);
@@ -125,7 +128,7 @@ export class Probe {
 
   /** Every request that finished after a mark, including successful ones. */
   requestsSince(mark: Mark): Array<{ method?: string; url: string; status?: number }> {
-    return this.network.filter((e) => e.seq > mark.seq).map((e) => e.value);
+    return this.network.filter((e) => e.seq > mark.seq).map(({ value: { ok: _ok, started: _s, ...r } }) => r);
   }
 
   private push<T>(list: Entry<T>[], value: T): void {
@@ -178,14 +181,14 @@ export class Probe {
       if (!r) return;
       this.inflight.delete(requestId);
       const status = r.status ?? 0;
-      this.push(this.network, { method: r.method, url: r.url, status, ms: Math.round(performance.now() - r.started), ok: status > 0 && status < 400 });
+      this.push(this.network, { method: r.method, url: r.url, status, ms: Math.round(performance.now() - r.started), ok: status > 0 && status < 400, started: r.started });
     });
     page.on("Network.loadingFailed", ({ requestId, errorText, canceled }) => {
       const r = this.inflight.get(requestId);
       if (!r) return;
       this.inflight.delete(requestId);
       if (canceled) return;
-      this.push(this.network, { method: r.method, url: r.url, ...(r.status ? { status: r.status } : {}), ms: Math.round(performance.now() - r.started), error: errorText, ok: false });
+      this.push(this.network, { method: r.method, url: r.url, ...(r.status ? { status: r.status } : {}), ms: Math.round(performance.now() - r.started), error: errorText, ok: false, started: r.started });
     });
 
     page.on("Page.frameStartedLoading", ({ frameId }) => {

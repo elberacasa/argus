@@ -3,7 +3,7 @@
 //   bun bench/speed.ts [url...]
 //
 // For each site, in a fresh throwaway lane: the browser's own load time (a raw
-// navigate to the load event, the floor no tool can beat), then argus's open,
+// navigate to DOMContentLoaded, the floor no tool can beat), then argus's open,
 // outline, a no-op step, check and a crop, each with its phases. Every number
 // is wall time through the Service, as a client sees it minus the socket.
 
