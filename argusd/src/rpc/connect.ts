@@ -12,10 +12,15 @@ import { dirname, join } from "node:path";
 import { Client } from "./client";
 import { defaultSocketPath } from "./server";
 
-/** How to start the daemon: the compiled binary if this is one, otherwise bun on the source. */
+/**
+ * How to start the daemon: this binary with `serve` when it is the compiled
+ * argusd, otherwise bun on argusd's own entry point. Never the running script:
+ * a benchmark importing connect() started copies of itself, each of which
+ * started another.
+ */
 function daemonCommand(): string[] {
-  const self = process.argv[1] ?? "";
-  if (self.endsWith(".ts")) return [process.execPath, self, "serve"];
+  const main = join(import.meta.dir, "..", "main.ts");
+  if (existsSync(main)) return [process.execPath, main, "serve"];
   return [process.execPath, "serve"];
 }
 

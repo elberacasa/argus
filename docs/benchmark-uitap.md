@@ -5,6 +5,71 @@ is a third-party site built to break browser automation, where every page
 states its own trap and what success means. The first benchmark
 (`docs/benchmark.md`) ran on pages written alongside Argus.
 
+## Head to head: Argus and Claude in Chrome, same model, same judge
+
+Run on 2026-09-17 with `cd argusd && bun bench/h2h.ts --rounds 2`. Every run
+is a separate headless Claude Code session (`claude -p --model claude-opus-5`)
+whose only tools are one browser tool's: Argus's MCP server, or Claude in
+Chrome (`--chrome`, driving the person's own Chromium). Built-in tools are off
+and user settings are not loaded. Both get the same task text; the only
+difference is one sentence naming the tools. Each challenge runs on both tools
+back to back, alternating which goes first.
+
+Neither tool grades itself. Both open the pages through a local proxy that
+injects a reporter into every page: it records trusted clicks and sends the
+page's real state to the harness, which decides whether the goal was met.
+
+| Challenge | Argus: calls · time, round 1 / round 2 | Claude in Chrome: calls · time, round 1 / round 2 |
+|---|---|---|
+| Hidden Layers | 5 · 15 s / 5 · 15 s | 5 · 26 s / 4 · 24 s |
+| Overlapped | 4 · 12 s / 4 · 12 s | 4 · 24 s / 4 · 21 s |
+| Visibility | 6 · 17 s / 5 · 12 s | 4 · 33 s / 4 · 30 s |
+| Click | 3 · 10 s / 3 · 10 s | 4 · 24 s / 4 · 25 s |
+| Text Input | 2 · 9 s / 2 · 8 s | 3 · 21 s / 3 · 19 s |
+| Client Side Delay | 2 · 23 s / 2 · 24 s | 5 · 43 s / 10 · 134 s |
+| Non-Breaking Space | 2 · 9 s / 2 · 9 s | 3 · 21 s / 4 · 23 s |
+| Scrollbars | 3 · 11 s / 3 · 11 s | 4 · 26 s / 4 · 23 s |
+| Shadow DOM | 4 · 12 s / 4 · 12 s | 3 · 18 s / 4 · 52 s |
+| Frames | 3 · 11 s / 3 · 11 s | 3 · 16 s / 3 · 18 s |
+
+| 20 runs each | Argus | Claude in Chrome |
+|---|---:|---:|
+| Goals met (read from the page) | **20 / 20** | **20 / 20** |
+| Reported success for something that did not happen | **0** | **0** |
+| Tool calls | 67 | 82 |
+| Time, total | **252 s** | 620 s |
+| Time, median run | **11.5 s** | 23.7 s |
+| Tokens (input incl. cache · output) | **756k · 7.5k** | 1,622k · 17.7k |
+| Cost | **$0.85** | $1.87 |
+
+**What this says.** On this site, driven by the same model, both tools get
+every goal right and neither claims a success that did not happen. Argus does
+it in less than half the time, tokens and cost: 2.5× faster in total, 2.1×
+faster in the median run, 2.2× cheaper.
+
+**Where the difference comes from, from the transcripts.** On Client Side Delay,
+Argus's session made one call that clicked, waited for the label to appear and
+clicked it (`{"wait": {"appears": "Data calculated on the client side."}}`).
+Claude in Chrome's round-2 session clicked by coordinates, took three
+screenshots while the page worked, ran `find`, ran JavaScript to locate the
+label, clicked, and ran JavaScript again to confirm what was under the click:
+10 calls, 134 s. Across all 20 runs, Argus's sessions took 1 full screenshot and
+10 element crops, ran no JavaScript and clicked by element, since each result
+already says what changed. Claude in Chrome's sessions took 41 screenshots and
+6 zooms, ran JavaScript 30 times to check the page, and clicked by screen
+coordinates 27 times.
+
+**Conditions that differ.** Argus ran in a headless browser it launched;
+Claude in Chrome ran in a visible tab of the person's Chromium, which is how it
+works. Time includes starting each `claude -p` session. Two rounds is a small
+sample: Claude in Chrome's time on the same challenge varied from 18 s to 52 s
+(Shadow DOM), Argus's by at most 5 s.
+
+**Correction to the earlier comparison below.** Earlier notes and posts said
+Claude in Chrome "got 9/10 with 3 false successes". That run was against the
+Argus prototype, driven interactively; the three were first attempts later
+retried. In this controlled run it had none. Use these numbers.
+
 ## A real model through Argus: 10/10, zero false successes
 
 Run on 2026-09-16 with `cd argusd && bun bench/rematch.ts`. Each challenge is a

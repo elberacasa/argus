@@ -165,18 +165,18 @@ Measured on the same machine, every call and token counted.
 **UI Testing Playground**, a third-party site built to break automation
 ([details](docs/benchmark-uitap.md)):
 
-| | Passed | Reported success for something that did not happen | Tool calls | Total |
-|---|:---:|:---:|:---:|:---:|
-| **Claude Opus 5 using Argus** (MCP) | **10 / 10** | **0** | 40 | 139 s · $0.53 |
-| Scripted agent using argusd | 10 / 10 | 0 | 31 | ~4,505 tokens |
-| Argus prototype | 7 / 10 | 0 | 24 | ~4,500 tokens + polling |
-| Claude in Chrome | 9 / 10 | 3 | ~29 | similar tokens |
+Same model (Claude Opus 5), same tasks, same judge; each run a fresh headless
+Claude Code session with only one tool's browser tools. 20 runs each:
 
-Every result is checked against the page itself, so a false success cannot hide.
-In the model run, each challenge was a fresh headless Claude Code session with
-only Argus's tools and the page's scenario as its task; reproduce it with
-`cd argusd && bun bench/rematch.ts`. The Claude in Chrome figures are from an
-earlier model-driven session and have not been rerun on the same day.
+| | Passed | Reported success for something that did not happen | Tool calls | Median run | Total | Tokens | Cost |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| **Argus** (MCP) | **20 / 20** | **0** | **67** | **11.5 s** | **252 s** | **764k** | **$0.85** |
+| Claude in Chrome | 20 / 20 | 0 | 82 | 23.7 s | 620 s | 1,640k | $1.87 |
+
+Both tools got every goal right. Argus did it in less than half the time,
+tokens and cost. Neither tool grades itself: pages are served through a proxy
+that reports their real state to the harness. Reproduce with
+`cd argusd && bun bench/h2h.ts --rounds 2`.
 
 **Argus's own test pages** ([details](docs/benchmark.md)): ~1,880 tokens for
 Argus and ~5,540 for Claude in Chrome across the five tasks both attempted.
