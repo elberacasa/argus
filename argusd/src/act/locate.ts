@@ -74,11 +74,11 @@ export function locate(scene: Scene, target: Target): Located {
   if (t.x !== undefined || t.y !== undefined)
     return { ok: false, diagnosis: { reason: "not-found", hint: "A point ({x, y}) is a place, not an element: only click, hover and drag take one.", didYouMean: [] } };
 
-  // "Draft 3" is text, not a role nobody has: a bare word that is not a role
-  // names what the page says.
-  if (t.role !== undefined && t.name === undefined && !ROLES.has(t.role.toLowerCase()) && !scene.elements.some((e) => e.role.toLowerCase() === t.role!.toLowerCase()))   {
-    const { role, ...rest } = t;
-    t = { ...rest, text: role };
+  // Text the page shows, not a role nobody has: "Draft 3", and
+  // "Total: $107.00" whose colon is not a role separator.
+  if (t.role !== undefined && !ROLES.has(t.role.toLowerCase()) && !scene.elements.some((e) => e.role.toLowerCase() === t.role!.toLowerCase())) {
+    const { role, name, ...rest } = t;
+    t = { ...rest, text: typeof target === "string" ? target : name === undefined ? role : `${role}:${name}` };
   }
 
   if (t.ref !== undefined) {

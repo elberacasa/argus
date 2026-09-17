@@ -222,3 +222,17 @@ describe("naming what a developer sees", () => {
     await service.call("lane.close", { lane });
   }, 30_000);
 });
+
+describe("quoting the page", () => {
+  test("text with a colon in it is text, not role:name", async () => {
+    const lane = await open(`${wb.base}/orders`);
+    await Bun.sleep(400);
+    const found = await service.call("scene.find", { lane, target: "Order #1250" }) as { matches: unknown[] };
+    expect(found.matches.length).toBe(1);
+    const lane2 = await open(`${wb.base}/checkout`);
+    const quoted = await service.call("scene.find", { lane: lane2, target: "Total: $107.00" }) as { matches: unknown[] };
+    expect(quoted.matches.length).toBe(1);
+    await service.call("lane.close", { lane });
+    await service.call("lane.close", { lane: lane2 });
+  }, 30_000);
+});
