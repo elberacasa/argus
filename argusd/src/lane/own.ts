@@ -121,7 +121,12 @@ export class OwnPage implements CdpPage {
     const send = <M extends Method>(method: M, params?: Params<M>) => bridge.request<Result<M>>("cdp", { lane, method, params: params ?? {} });
     const { frameTree } = await send("Page.getFrameTree");
     const page = new OwnPage(bridge, lane, frameTree.frame.id);
-    await Promise.all([page.send("Page.enable"), page.send("Runtime.enable")]);
+    // An argus tab stays in the background so the person keeps theirs. A
+    // headful Chromium drops input to a hidden tab (measured: a real click on
+    // "Accept" changed nothing, visibilityState "hidden"); focus emulation makes
+    // the page visible and focused to itself without bringing the tab forward,
+    // and the same click lands.
+    await Promise.all([page.send("Page.enable"), page.send("Runtime.enable"), page.send("Emulation.setFocusEmulationEnabled", { enabled: true })]);
     return page;
   }
 
