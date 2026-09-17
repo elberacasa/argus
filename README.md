@@ -5,7 +5,8 @@
 # Argus
 
 ### Computer use for Omarchy.
-Agents see the screen, act on it, and are told the truth about what happened.
+Agents see the screen, act on it, and are told the truth about what happened.<br>
+Every step is verified against the page, every failure has a reason, and the evidence is published.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-3ccbb8?style=flat-square)](LICENSE)
 [![Omarchy](https://img.shields.io/badge/built%20for-Omarchy-101418?style=flat-square)](https://omarchy.org)
@@ -24,7 +25,11 @@ Agents see the screen, act on it, and are told the truth about what happened.
 
 <br><br>
 
-<img src="docs/media/stats.svg" alt="0 false successes on UI Testing Playground · ~105 tokens per action · 3 ms to explain a blocked click · 1–2 ms real click in a nest" width="100%">
+<img src="docs/media/stats.svg" alt="48 of 48 benchmarked tasks correct with no false successes · 2.5× faster than Claude in Chrome on the same tasks · about 105 tokens an action · six of six planted UI defects found" width="100%">
+
+<sub>Measured on one Omarchy machine, driven by Claude Opus 5. Every session's log is in
+<a href="docs/benchmarks/">docs/benchmarks</a>: <a href="docs/benchmarks/h2h-2026-09-17/">UI Testing Playground</a> ·
+<a href="docs/benchmarks/workbench-2026-09-17/">Workbench</a>. Tasks and pass criteria were published before any tool ran them.</sub>
 
 </div>
 

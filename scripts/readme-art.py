@@ -43,10 +43,10 @@ def text(x, y, s, size=14, fill=INK, weight=400, family=SANS, anchor="start", ex
 
 def stats() -> str:
     cards = [
-        ("10/10", "0 false successes", "UI Testing Playground"),
-        ("~105", "tokens per action", "vs 1,334 per screenshot"),
-        ("3 ms", "to explain a blocked click", "names what is on top"),
-        ("1–2 ms", "real click in a nest", "yours never moves"),
+        ("48 / 48", "benchmarked tasks correct", "0 claimed successes that did not happen"),
+        ("2.5×", "faster than Claude in Chrome", "same model, same tasks, same judge"),
+        ("~105", "tokens per action", "vs 1,334 for a screenshot"),
+        ("6 / 6", "planted UI defects found", "in 5–8 calls, none invented"),
     ]
     w, h, pad, gap = 1000, 168, 20, 14
     cw = (w - pad * 2 - gap * 3) / 4
@@ -54,10 +54,10 @@ def stats() -> str:
     for i, (value, label, note) in enumerate(cards):
         x = pad + i * (cw + gap)
         body += f'<rect x="{x:.1f}" y="{pad}" width="{cw:.1f}" height="{h - pad * 2}" rx="12" fill="rgba(255,255,255,0.03)" stroke="{EDGE}"/>'
-        body += text(x + 18, pad + 56, value, 38, ACCENT if i == 0 else INK, 700)
+        body += text(x + 18, pad + 56, value, 34, ACCENT if i == 0 else INK, 700)
         body += text(x + 18, pad + 86, label, 15, INK, 600)
         body += text(x + 18, pad + 110, note, 11.5, MUTED)
-    return tile(w, h, body, "Argus in four measured numbers")
+    return tile(w, h, body, "48 of 48 benchmarked tasks correct with no false successes; 2.5x faster than Claude in Chrome; about 105 tokens an action; six of six planted defects found")
 
 
 def tokens() -> str:

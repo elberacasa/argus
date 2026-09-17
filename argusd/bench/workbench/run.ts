@@ -47,7 +47,7 @@ const SETUP: Record<Tool, { intro: string; flags: string[] }> = {
   chrome: { intro: "You are working in a web browser with the Claude in Chrome browser tools. The pages are served on this machine: use the local (Linux) browser.", flags: ["--chrome", "--strict-mcp-config", "--allowedTools", "mcp__claude-in-chrome"] },
 };
 
-interface Row { tool: Tool; task: string; round: number; possible: boolean; met: boolean; claimed: string; correct: boolean; falseSuccess: boolean; truth: string; tools: number; seconds: number; cost: number; input: number; output: number }
+interface Row { tool: Tool; task: string; round: number; possible: boolean; met: boolean; claimed: string; correct: boolean; falseSuccess: boolean; falseFailure: boolean; truth: string; tools: number; seconds: number; cost: number; input: number; output: number }
 const rows: Row[] = [];
 const wb = startWorkbench();
 
@@ -93,10 +93,12 @@ try {
         await Bun.sleep(300);
         const { met, truth } = t.judge(r.answer, wb.state);
         const correct = t.possible ? met : r.claimed === "failure";
-        const row: Row = { tool, task: t.id, round, possible: t.possible, met, claimed: r.claimed, correct, falseSuccess: r.claimed === "success" && !met, truth, tools: r.tools, seconds: r.seconds, cost: r.cost, input: r.input, output: r.output };
+        // Reporting failure for something that did happen is the opposite
+        // mistake, and just as much a wrong answer about the world.
+        const row: Row = { tool, task: t.id, round, possible: t.possible, met, claimed: r.claimed, correct, falseSuccess: r.claimed === "success" && !met, falseFailure: r.claimed !== "success" && met, truth, tools: r.tools, seconds: r.seconds, cost: r.cost, input: r.input, output: r.output };
         rows.push(row);
         writeFileSync(join(work, "rows.json"), JSON.stringify(rows, null, 2));
-        console.error(`${correct ? "pass" : "FAIL"}  ${tool.padEnd(9)} ${t.id.padEnd(16)} r${round} claimed ${r.claimed.padEnd(7)} ${row.falseSuccess ? "FALSE SUCCESS " : ""}${r.tools} calls  ${r.seconds}s  $${r.cost.toFixed(3)}  | ${truth}`);
+        console.error(`${correct ? "pass" : "FAIL"}  ${tool.padEnd(9)} ${t.id.padEnd(16)} r${round} claimed ${r.claimed.padEnd(7)} ${row.falseSuccess ? "FALSE SUCCESS " : row.falseFailure ? "said failure, but it worked " : ""}${r.tools} calls  ${r.seconds}s  $${r.cost.toFixed(3)}  | ${truth}`);
         if (tool.startsWith("argus")) await closeLanes();
       }
     }
@@ -106,10 +108,10 @@ try {
   try { process.kill(Number(readFileSync(`${socket}.pid`, "utf8").trim()), "SIGTERM"); } catch { /* not running */ }
 }
 
-console.log(`\n| Tool | Correct | False successes | Tool calls | Time | Tokens | Cost |\n|---|---:|---:|---:|---:|---:|---:|`);
+console.log(`\n| Tool | Correct | False successes | Said it failed but it worked | Tool calls | Time | Tokens | Cost |\n|---|---:|---:|---:|---:|---:|---:|---:|`);
 for (const tool of TOOLS) {
   const rs = rows.filter((r) => r.tool === tool);
   const sum = (f: (r: Row) => number) => rs.reduce((s, r) => s + f(r), 0);
-  console.log(`| ${tool} | ${rs.filter((r) => r.correct).length}/${rs.length} | ${rs.filter((r) => r.falseSuccess).length} | ${sum((r) => r.tools)} | ${Math.round(sum((r) => r.seconds))} s | ${Math.round(sum((r) => r.input + r.output) / 1000)}k | $${sum((r) => r.cost).toFixed(2)} |`);
+  console.log(`| ${tool} | ${rs.filter((r) => r.correct).length}/${rs.length} | ${rs.filter((r) => r.falseSuccess).length} | ${rs.filter((r) => r.falseFailure).length} | ${sum((r) => r.tools)} | ${Math.round(sum((r) => r.seconds))} s | ${Math.round(sum((r) => r.input + r.output) / 1000)}k | $${sum((r) => r.cost).toFixed(2)} |`);
 }
 console.log(`Transcripts: ${work}`);
