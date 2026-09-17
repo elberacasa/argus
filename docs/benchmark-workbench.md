@@ -51,4 +51,74 @@ published whatever they are.
 | Find the defects | Audit a page, including at 390×844, listing each problem as one of nine kinds | all six planted problems found (low contrast, unnamed icon button, image without alt, overflow on phones, console error, failed request) and none of the three kinds not present (heading order, small tap target, duplicate id) reported |
 | Covered on phones | At 390×844, can the Checkout button be tapped? | answers no and names the promo bar covering it |
 
-Results: not yet run.
+## Results, 2026-09-17
+
+One round, Claude Opus 5, every session judged from the server's own record.
+Logs for all 42 sessions, with the images each model was shown, are in
+[benchmarks/workbench-2026-09-17](benchmarks/workbench-2026-09-17/).
+
+| | Argus (its own browser) | Argus (the person's Chromium) | Claude in Chrome |
+|---|---:|---:|---:|
+| Correct | **14/14** | **14/14** | 12/14 |
+| Claimed a success that did not happen | **0** | **0** | **0** |
+| Tool calls | **87** | 179 | 201 |
+| Time | **222 s** | 755 s | 1,835 s |
+| Tokens | **1,114k** | 2,960k | 5,257k |
+| Cost | **$1.31** | $3.00 | $5.84 |
+
+No tool claimed a success that had not happened, on any task, including the two
+traps: every session reported failure for the order that always errors and for
+the setting that says "Saved ✓" and reverts on reload.
+
+**Claude in Chrome's two misses were refusals, not inability.** On the signup
+form it declined the task ("Creating an account and entering a password into a
+signup form are actions I don't perform on a user's behalf"). On the upload its
+`file_upload` answered "only files this session is allowed to read can be
+uploaded" for every path we could offer from a headless session; the task was
+rerun three ways -- the file inside the session's own working directory,
+`--add-dir` on that directory, and the Read tool allowed -- and refused each
+time. Both look like deliberate product limits for non-interactive sessions,
+not something the tool cannot do.
+
+**Where the gaps are widest.** Finding the six planted defects: Argus 5-8 calls
+and 15-33 s, Claude in Chrome 34 calls and 300 s, because `check` measures
+contrast, alt text, overflow at 390px, console errors and failed requests
+directly instead of inferring them from screenshots. The confirm dialog: 3 calls
+and 10 s against 18 calls and 166 s. The cross-origin frame: 2 calls and 8 s
+against 10 calls and 111 s.
+
+**Argus is slower in the person's own browser** (755 s against 222 s for the
+same 14 tasks): every call crosses the extension and the native host, and a
+background tab is throttled. Two bugs found there are fixed (below); the run
+above still contains them.
+
+## What the first run changed
+
+The tasks were run first against Argus as it was, then the tool was fixed and
+the same tasks run again. Nothing in the tasks or the judging changed.
+
+| | Before | After |
+|---|---:|---:|
+| Correct | 13/14 | **14/14** |
+| Tool calls | 170 | **87** |
+| Time | 471 s | **222 s** |
+| Cost | $2.24 | **$1.31** |
+
+| Task | Before | After |
+|---|---|---|
+| Drag and drop | failed after 10 calls: nothing could drag | 3 calls, 8 s |
+| Canvas map | 28 calls, 92 s: resized the window and scrolled until the marker sat in the middle | 5 calls, 11 s |
+| Long custom list | 51 calls, 128 s, about five rows per call | 6 calls, 15 s |
+| Confirm dialog | 9 calls, 23 s | 3 calls, 10 s |
+| Multi-step form | 17 calls, 38 s | 11 calls, 24 s |
+
+Each fix came from what the model tried to call and could not:
+`{"drag": [from, to]}`, `click {"x", "y"}`, and scrolling inside a list. Rows of
+identical buttons now carry their row ("Delete (Draft 3)"), a control is found
+by what it shows as well as its name, `aria-labelledby` names controls, and a
+confirm dismissed by default says how to accept it.
+
+Two more, found while Argus drove the person's own Chromium and fixed after the
+run above: "scroll until X in Y" took Y literally when an agent named a row
+rather than the list around it, and a screenshot of a background tab stalled for
+8 s instead of saying that the browser only paints the tab in front.

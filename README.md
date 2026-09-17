@@ -194,6 +194,20 @@ JavaScript and read it back. Both were right.
 
 <img src="docs/media/h2h-hiddenlayers.png" alt="Hidden Layers, round 1: Argus reports the second click as covered by another button; Claude in Chrome verifies with an injected click listener" width="100%">
 
+**Workbench**, fourteen realistic tasks built for this benchmark -- an app that
+routes on the client, a form with custom widgets, a confirm dialog, upload,
+dragging, a canvas map, a cross-origin frame, a list that renders only what is
+in view, a hover menu, infinite scroll, two traps whose honest answer is that it
+did not work, and two UI audits ([details](docs/benchmark-workbench.md), [every
+session](docs/benchmarks/workbench-2026-09-17/)):
+
+<img src="docs/media/workbench.svg" alt="Workbench results: Argus 14/14 in 87 calls and 222 s, Argus in the person's own Chromium 14/14, Claude in Chrome 12/14 in 201 calls and 1,835 s; no false successes anywhere" width="100%">
+
+The tasks and their pass criteria were published before any tool ran them.
+Claude in Chrome's two misses were refusals rather than inability: it declines
+to create an account with a password, and its file upload refuses paths in a
+headless session. Nothing claimed a success that had not happened.
+
 **Argus's own test pages** ([details](docs/benchmark.md)): ~1,880 tokens for
 Argus and ~5,540 for Claude in Chrome across the five tasks both attempted.
 
