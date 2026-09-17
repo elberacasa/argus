@@ -19,6 +19,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { Client } from "../src/rpc/client";
 import { connect } from "../src/rpc/connect";
+import { ENDING, runSession } from "./lib/session";
 
 const UPSTREAM = "http://uitestingplayground.com";
 const ROOT = resolve(import.meta.dir, "../..");
@@ -166,7 +167,6 @@ const challenges: Record<string, Challenge> = {
 
 // ---- sessions ----------------------------------------------------------------
 
-const ENDING = `Do the task, check the outcome with the tools, then end your reply with exactly one final line: "RESULT: success" if the task's success condition was met, or "RESULT: failure" if it was not or you could not tell.`;
 const SETUP = {
   argus: { intro: "You are testing a web page with the Argus browser tools.", flags: ["--strict-mcp-config", "--mcp-config", join(work, "mcp.json"), "--allowedTools", "mcp__argus"] },
   // Claude in Chrome serves every connected browser; the page is on this machine.
@@ -178,32 +178,11 @@ const rows: Row[] = [];
 
 async function session(tool: "argus" | "chrome", name: string, round: number, c: Challenge): Promise<Row> {
   truths.delete(name);
-  const t0 = performance.now();
-  const child = Bun.spawn(["claude", "-p", `${c.task}\n\n${SETUP[tool].intro} ${ENDING}`, "--model", MODEL,
-    "--tools", "", ...SETUP[tool].flags, "--setting-sources", "", "--no-session-persistence", "--output-format", "stream-json", "--verbose"],
-    { cwd: join(work, "cwd"), stdout: "pipe", stderr: "pipe", stdin: "ignore" });
-  const killer = setTimeout(() => child.kill(), 600_000);
-  const stdout = await new Response(child.stdout).text();
-  await child.exited;
-  clearTimeout(killer);
-  const seconds = Math.round((performance.now() - t0) / 100) / 10;
-  writeFileSync(join(work, `${tool}-${name}-${round}.jsonl`), stdout);
+  const r = await runSession({ prompt: `${c.task}\n\n${SETUP[tool].intro} ${ENDING}`, model: MODEL, flags: SETUP[tool].flags, cwd: join(work, "cwd"), transcript: join(work, `${tool}-${name}-${round}.jsonl`) });
   // Let the reporter's last beacon arrive.
   await Bun.sleep(600);
-  type Event = { type: string; result?: string; usage?: Record<string, number>; total_cost_usd?: number; message?: { content?: Array<{ type: string }> } };
-  const events = stdout.split("\n").filter(Boolean).map((l) => { try { return JSON.parse(l) as Event; } catch { return null; } }).filter((e): e is Event => !!e);
-  const final = events.findLast((e) => e.type === "result") ?? ({} as Event);
-  const answer = final.result ?? "";
-  const tools = events.filter((e) => e.type === "assistant").flatMap((e) => e.message?.content ?? []).filter((b) => b.type === "tool_use").length;
-  const claimedMatch = /RESULT:\s*(success|failure)/i.exec(answer.split("\n").filter(Boolean).at(-1) ?? "");
-  const claimed = (claimedMatch?.[1]?.toLowerCase() ?? "none") as Row["claimed"];
-  const { met, truth } = c.judge(answer);
-  const u = final.usage ?? {};
-  return {
-    tool, name, round, met, claimed, falseSuccess: claimed === "success" && !met, truth, tools, seconds,
-    cost: final.total_cost_usd ?? 0, output: u.output_tokens ?? 0,
-    input: (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0),
-  };
+  const { met, truth } = c.judge(r.answer);
+  return { tool, name, round, met, claimed: r.claimed, falseSuccess: r.claimed === "success" && !met, truth, tools: r.tools, seconds: r.seconds, cost: r.cost, input: r.input, output: r.output };
 }
 
 // Start Argus's daemon and browser first: Claude in Chrome's browser is already running.
