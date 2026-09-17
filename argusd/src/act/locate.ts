@@ -37,6 +37,7 @@ export function label(e: { role: string; name: string; selector?: string }): str
 
 export function describeTarget(target: Target): string {
   if (typeof target === "string") return target;
+  if (target.x !== undefined) return `point (${target.x}, ${target.y})${target.in !== undefined ? ` in ${describeTarget(target.in)}` : ""}`;
   if (target.text) return `text "${target.text}"`;
   return [target.role, target.name !== undefined ? `"${target.name}"` : ""].filter(Boolean).join(" ") || "element";
 }
@@ -56,8 +57,21 @@ const lower = (s: string) => norm(s).toLowerCase();
 const center = (e: { bounds: { x: number; y: number; w: number; h: number } | null }) =>
   e.bounds ? { x: e.bounds.x + e.bounds.w / 2, y: e.bounds.y + e.bounds.h / 2 } : null;
 
+/** ARIA roles and the implicit ones argus assigns; a bare word that is not one of these is text. */
+const ROLES = new Set(["alert", "alertdialog", "application", "article", "banner", "button", "cell", "checkbox", "columnheader", "combobox", "complementary", "contentinfo", "definition", "dialog", "directory", "document", "feed", "figure", "file", "form", "generic", "grid", "gridcell", "group", "heading", "image", "img", "label", "link", "list", "listbox", "listitem", "log", "main", "marquee", "math", "menu", "menubar", "menuitem", "menuitemcheckbox", "menuitemradio", "meter", "navigation", "none", "note", "option", "presentation", "progressbar", "radio", "radiogroup", "region", "row", "rowgroup", "rowheader", "scrollbar", "search", "searchbox", "separator", "slider", "spinbutton", "status", "switch", "tab", "table", "tablist", "tabpanel", "term", "textbox", "timer", "toolbar", "tooltip", "tree", "treegrid", "treeitem"]);
+
 export function locate(scene: Scene, target: Target): Located {
-  const t = parseTarget(target);
+  let t = parseTarget(target);
+
+  if (t.x !== undefined || t.y !== undefined)
+    return { ok: false, diagnosis: { reason: "not-found", hint: "A point ({x, y}) is a place, not an element: only click, hover and drag take one.", didYouMean: [] } };
+
+  // "Draft 3" is text, not a role nobody has: a bare word that is not a role
+  // names what the page says.
+  if (t.role !== undefined && t.name === undefined && !ROLES.has(t.role.toLowerCase()) && !scene.elements.some((e) => e.role.toLowerCase() === t.role!.toLowerCase()))   {
+    const { role, ...rest } = t;
+    t = { ...rest, text: role };
+  }
 
   if (t.ref !== undefined) {
     const element = scene.elements.find((e) => e.backendNodeId === t.ref) ?? scene.describe(t.ref);
@@ -106,6 +120,12 @@ export function locate(scene: Scene, target: Target): Located {
       const hits = pool.filter((e) => test(e.name));
       if (hits.length) return choose(scene, hits, match, t, target);
     }
+    // What it shows, when its name is something else: "button:›" is the
+    // button named "Next month" that reads ›.
+    for (const [match, test] of levels) {
+      const hits = pool.filter((e) => e.content !== undefined && test(e.content));
+      if (hits.length) return choose(scene, hits, match, t, target);
+    }
   }
 
   return {
@@ -127,11 +147,15 @@ function choose(scene: Scene, found: SceneElement[], match: Match, t: TargetObje
   if (t.near !== undefined) {
     const anchor = locate(scene, t.near);
     if (!anchor.ok) return anchor;
+    // Nearest in the page's structure first -- the Delete button in Draft 3's
+    // row shares a closer container with "Draft 3" than the next row's does --
+    // then on screen.
     const a = center(anchor.element);
-    if (a) {
-      pool = [...pool].sort((x, y) => dist(center(x), a) - dist(center(y), a));
-      if (t.nth === undefined) return { ok: true, element: pool[0]!, match };
-    }
+    const up = scene.ancestors(anchor.element.backendNodeId);
+    const depth = new Map(up.map((id, i) => [id, up.length - i]));
+    const shared = (e: SceneElement) => { for (const id of scene.ancestors(e.backendNodeId)) { const d = depth.get(id); if (d !== undefined) return d; } return 0; };
+    pool = [...pool].sort((x, y) => shared(y) - shared(x) || (a ? dist(center(x), a) - dist(center(y), a) : 0));
+    if (t.nth === undefined) return { ok: true, element: pool[0]!, match };
   }
   if (t.nth !== undefined) {
     const chosen = pool[t.nth - 1];

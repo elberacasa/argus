@@ -25,6 +25,7 @@ const FORWARDED = new Set([
   "Runtime.consoleAPICalled", "Runtime.exceptionThrown", "Runtime.executionContextCreated", "Runtime.executionContextsCleared",
   "Log.entryAdded", "Page.loadEventFired", "Page.frameStartedLoading", "Page.javascriptDialogOpening", "Page.lifecycleEvent",
   "Network.requestWillBeSent", "Network.responseReceived", "Network.loadingFinished", "Network.loadingFailed",
+  "Input.dragIntercepted",
 ]);
 
 function laneOf(tabId) {

@@ -22,7 +22,7 @@ export function renderObservation(o: Observation, indent = "  "): string[] {
   for (const t of o.removed ?? []) out.push(`${indent}− ${q(t)}`);
   if (o.removedMore) out.push(`${indent}− … ${o.removedMore} more`);
   for (const f of o.fields ?? []) out.push(`${indent}= ${f.target}: ${f.from !== undefined ? `${q(f.from)} → ` : ""}${q(f.to)}`);
-  for (const d of o.dialogs ?? []) out.push(`${indent}◇ ${d.type} ${q(d.message)} (${d.answered})`);
+  for (const d of o.dialogs ?? []) out.push(`${indent}◇ ${d.type} ${q(d.message)} (${d.answered}${d.answered === "dismiss" && d.type !== "alert" ? `; to accept it, run {"dialog": "accept"} before the step that opens it` : ""})`);
   for (const c of o.console ?? []) out.push(`${indent}! console ${c.level}: ${c.text}`);
   for (const e of o.exceptions ?? []) out.push(`${indent}! exception: ${e.message}`);
   for (const r of o.network ?? []) out.push(`${indent}~ ${r.method ?? "GET"} ${r.url} ${r.error ?? r.status ?? ""}${r.ms !== undefined ? ` ${r.ms}ms` : ""}`);

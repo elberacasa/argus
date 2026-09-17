@@ -8,7 +8,7 @@ export type Ref = string;
 
 export interface Viewport { w: number; h: number; mobile?: boolean; scale?: number }
 
-export interface TargetObject { role?: string; name?: string; text?: string; near?: Target; nth?: number }
+export interface TargetObject { role?: string; name?: string; text?: string; near?: Target; nth?: number; x?: number; y?: number; in?: Target }
 export type Target = string | TargetObject;
 
 export type ElementStateName =
@@ -35,13 +35,14 @@ export type Step = { id?: string; expect?: Expectation } & (
   | { press: string }
   | { select: [Target, string] }
   | { upload: [Target, ...string[]] }
-  | { scroll: Target | { by: { x: number; y: number } } }
+  | { drag: [Target, Target] }
+  | { scroll: Target | { by: { x: number; y: number }; in?: Target } | { until: Target; in?: Target } }
   | { dialog: "accept" | "dismiss" | { accept: string } }
   | { viewport: Viewport | "reset" }
   | { wait: Expectation }
 );
 
-export type Verb = "open" | "click" | "hover" | "type" | "press" | "select" | "upload" | "scroll" | "dialog" | "viewport" | "wait";
+export type Verb = "open" | "click" | "hover" | "type" | "press" | "select" | "upload" | "drag" | "scroll" | "dialog" | "viewport" | "wait";
 
 export interface Rect { x: number; y: number; w: number; h: number }
 

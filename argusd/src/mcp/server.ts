@@ -22,7 +22,7 @@ import { renderAct, renderCheck, renderFind, renderObservation, renderRun, rende
 type Content = { type: "text"; text: string } | { type: "image"; data: string; mimeType: string };
 interface ToolResult { content: Content[]; isError?: boolean }
 
-const target = { description: 'What to act on: "role:name" (e.g. "button:Sign in"), a ref from an outline (e.g. "e0.57"), or an object {"text": "..."} / {"role", "name", "nth", "near"}.' };
+const target = { description: 'What to act on: "role:name" (e.g. "button:Sign in"), a ref from an outline (e.g. "e0.57"), text on the page (e.g. "Draft 3"), or an object {"text": "..."} / {"role", "name", "nth", "near"}. Where there is no element to name (a canvas, a map, a chart), a point: {"x", "y"} in viewport pixels, or {"x", "y", "in": ref} measured from that element\'s top-left; read the numbers off a browser_look image, whose caption says where it sits.' };
 const lane = { type: "string", description: 'Lane name. Each lane is an isolated browser (own cookies and history). Default "main". Use several for parallel work.' };
 const expect = {
   type: "object",
@@ -30,7 +30,7 @@ const expect = {
 };
 const steps = {
   type: "array",
-  description: 'Steps, run in order until the first surprise. One verb per step: {"open": url} {"click": target} {"type": [target, text]} {"press": "Enter"} {"select": [target, option]} {"hover": target} {"scroll": target | {"by": {x, y}}} {"upload": [target, path...]} {"dialog": "accept"|"dismiss"} {"viewport": {w, h}} {"wait": expectation}. Any step may add "expect".',
+  description: 'Steps, run in order until the first surprise. One verb per step: {"open": url} {"click": target} {"type": [target, text]} {"press": "Enter"} {"select": [target, option]} {"hover": target} {"drag": [from, to]} {"scroll": target | {"by": {x, y}, "in"?: target} | {"until": target, "in"?: target}} {"upload": [target, path...]} {"dialog": "accept"|"dismiss"} {"viewport": {w, h}} {"wait": expectation}. Any step may add "expect".',
   items: { type: "object" },
 };
 
@@ -39,8 +39,12 @@ const TOOLS = [
     inputSchema: { type: "object", properties: { url: { type: "string" }, lane, own: { type: "boolean", description: "Open the lane as a tab in the person's own Chromium, with their logins, through the Argus extension. It only ever touches tabs it opened. Ask the person before acting on their accounts." }, desk: { type: "boolean", description: "Open the lane as a real, headful window on the desk (a monitor only agents use, watched from the Omarchy bar) instead of a headless browser. Only when the lane is first opened." }, viewport: { type: "object", description: "{w, h}; widths under 600 emulate a phone", properties: { w: { type: "integer" }, h: { type: "integer" } } } }, required: ["url"] } },
   { name: "browser_act", description: "Run a script of steps in one call, each verified; stops at the first step that fails and says why (covered, disabled, hidden, ambiguous, not-found with near matches, expectation-failed, timeout). Prefer this to single clicks when you know the next few steps.",
     inputSchema: { type: "object", properties: { steps, lane }, required: ["steps"] } },
-  { name: "browser_click", description: "Click one element with a real pointer. Returns what changed. If it cannot land (covered, disabled, hidden, offscreen) it does not click, and names the reason and the blocker.",
-    inputSchema: { type: "object", properties: { target, lane, expect }, required: ["target"] } },
+  { name: "browser_click", description: "Click one element, or a point, with a real pointer. Returns what changed. If it cannot land (covered, disabled, hidden, offscreen) it does not click, and names the reason and the blocker. Confirm dialogs it opens are dismissed unless dialog is \"accept\".",
+    inputSchema: { type: "object", properties: { target, lane, expect, dialog: { enum: ["accept", "dismiss"], description: "How to answer a confirm or prompt dialog the click opens. Default dismiss." } }, required: ["target"] } },
+  { name: "browser_drag", description: "Drag from one element or point to another with the pointer held down: cards between columns, sliders, map pins, reordering. Works for pointer-driven and native HTML5 drag and drop. Returns what changed.",
+    inputSchema: { type: "object", properties: { from: target, to: target, lane, expect }, required: ["from", "to"] } },
+  { name: "browser_scroll", description: 'Scroll with the wheel. {"until": target} keeps scrolling until the target is on the page: long lists that only render the rows in view, feeds that load more at the bottom. "in" scrolls inside a container (a list, a panel) instead of the page. Or {"by": {"x", "y"}} pixels, or a target to bring into view.',
+    inputSchema: { type: "object", properties: { until: target, in: target, by: { type: "object", properties: { x: { type: "number" }, y: { type: "number" } } }, target, lane } } },
   { name: "browser_type", description: "Replace a field's text by typing into it. Verifies the field holds the text afterwards.",
     inputSchema: { type: "object", properties: { target, text: { type: "string" }, lane, expect }, required: ["target", "text"] } },
   { name: "browser_press", description: 'Press a key or chord: "Enter", "Tab", "Escape", "Control+a", ...',
@@ -135,7 +139,15 @@ export class McpServer {
         return text([...head, "", outline].join("\n"));
       }
       case "browser_act": return this.act(args, args.steps as unknown[]);
-      case "browser_click": return this.act(args, [withExpect({ click: args.target })]);
+      case "browser_click": return this.act(args, [...(args.dialog ? [{ dialog: args.dialog }] : []), withExpect({ click: args.target })]);
+      case "browser_drag": return this.act(args, [withExpect({ drag: [args.from, args.to] })]);
+      case "browser_scroll": {
+        const inside = args.in !== undefined ? { in: args.in } : {};
+        if (args.until !== undefined) return this.act(args, [{ scroll: { until: args.until, ...inside } }]);
+        if (args.by !== undefined) return this.act(args, [{ scroll: { by: args.by, ...inside } }]);
+        if (args.target !== undefined) return this.act(args, [{ scroll: args.target }]);
+        return text('Give "until", "by" or "target".', true);
+      }
       case "browser_type": return this.act(args, [withExpect({ type: [args.target, args.text] })]);
       case "browser_press": return this.act(args, [withExpect({ press: args.key })]);
       case "browser_select": return this.act(args, [withExpect({ select: [args.target, args.option] })]);
@@ -158,9 +170,10 @@ export class McpServer {
           return text(entries.map((e) => `${e.at.slice(11, 19)} ${e.ok ? "✓" : "✗"} ${e.method} ${e.ms}ms ${e.id}`).join("\n") || "(nothing yet)");
         }
         const e = name === "browser_look"
-          ? await c.call<{ image: string; w: number; h: number; tokens: number }>("evidence.look", { lane: l.id, ...(args.target !== undefined ? { target: args.target } : {}) })
-          : await c.call<{ image: string; w: number; h: number; tokens: number }>("evidence.shot", { lane: l.id, ...(args.full ? { full: true } : {}) });
-        return this.image(e.image, `${e.w}x${e.h}, ${e.tokens} image tokens`);
+          ? await c.call<{ image: string; w: number; h: number; tokens: number; origin?: { x: number; y: number } }>("evidence.look", { lane: l.id, ...(args.target !== undefined ? { target: args.target } : {}) })
+          : await c.call<{ image: string; w: number; h: number; tokens: number; origin?: { x: number; y: number } }>("evidence.shot", { lane: l.id, ...(args.full ? { full: true } : {}) });
+        const where = e.origin ? ` at (${e.origin.x}, ${e.origin.y}) in the viewport; image pixel (px, py) is viewport point (${e.origin.x}+px, ${e.origin.y}+py)` : "";
+        return this.image(e.image, `${e.w}x${e.h}${where}, ${e.tokens} image tokens`);
       }
 
       case "browser_run": return text(renderRun(await (await this.daemon()).call("run", { name: args.name, steps: args.steps })));

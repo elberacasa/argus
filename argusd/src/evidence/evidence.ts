@@ -14,7 +14,7 @@ import { join } from "node:path";
 import type { CdpPage as Page } from "../cdp/page";
 import type { Scene, SceneElement } from "../scene/snapshot";
 
-export interface Evidence { image: string; w: number; h: number; tokens: number }
+export interface Evidence { image: string; w: number; h: number; tokens: number; origin?: { x: number; y: number } }
 
 export const imageTokens = (w: number, h: number) => Math.ceil(w / 28) * Math.ceil(h / 28);
 
@@ -41,7 +41,7 @@ export async function readyToLook(page: Page, timeoutMs = 3000): Promise<void> {
   }).catch(() => undefined);
 }
 
-async function capture(page: Page, lane: string, kind: string, clip?: { x: number; y: number; width: number; height: number }, full = false): Promise<Evidence> {
+async function capture(page: Page, lane: string, kind: string, clip?: { x: number; y: number; width: number; height: number }, full = false, origin?: { x: number; y: number }): Promise<Evidence> {
   await readyToLook(page);
   const { data } = await page.send("Page.captureScreenshot", {
     format: "png",
@@ -53,7 +53,7 @@ async function capture(page: Page, lane: string, kind: string, clip?: { x: numbe
   const w = bytes.readUInt32BE(16), h = bytes.readUInt32BE(20);
   const image = join(evidenceDir(), `${lane}-${kind}-${Date.now()}.png`);
   await Bun.write(image, bytes);
-  return { image, w, h, tokens: imageTokens(w, h) };
+  return { image, w, h, tokens: imageTokens(w, h), ...(origin ? { origin } : {}) };
 }
 
 export async function shot(page: Page, lane: string, full = false): Promise<Evidence> {
@@ -61,7 +61,7 @@ export async function shot(page: Page, lane: string, full = false): Promise<Evid
     // Always clipped to the viewport: an unclipped capture of a tab the browser
     // is not painting (a background tab in the person's browser) can stall.
     const { cssVisualViewport: vv } = await page.send("Page.getLayoutMetrics");
-    return capture(page, lane, "shot", { x: vv.pageX, y: vv.pageY, width: Math.round(vv.clientWidth), height: Math.round(vv.clientHeight) });
+    return capture(page, lane, "shot", { x: vv.pageX, y: vv.pageY, width: Math.round(vv.clientWidth), height: Math.round(vv.clientHeight) }, false, { x: 0, y: 0 });
   }
   const metrics = await page.send("Page.getLayoutMetrics");
   const { width, height } = metrics.cssContentSize;
@@ -77,5 +77,5 @@ export async function look(page: Page, lane: string, scene: Scene, element: Scen
   // Scene bounds are viewport coordinates; a clip is in page coordinates.
   const x = Math.max(0, b.x - pad + pageX), y = Math.max(0, b.y - pad + pageY);
   const width = Math.min(b.w + pad * 2, scene.viewport.w + pageX - x), height = Math.min(b.h + pad * 2, scene.viewport.h + pageY - y);
-  return capture(page, lane, "look", { x, y, width: Math.max(1, Math.round(width)), height: Math.max(1, Math.round(height)) });
+  return capture(page, lane, "look", { x, y, width: Math.max(1, Math.round(width)), height: Math.max(1, Math.round(height)) }, false, { x: Math.round(x - pageX), y: Math.round(y - pageY) });
 }

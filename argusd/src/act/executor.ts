@@ -10,7 +10,7 @@
 import type { CdpPage as Page } from "../cdp/page";
 import type { Probe, Mark } from "../lane/probe";
 import type {
-  ActResult, Diagnosis, Element, ElementStateName, Expectation, FailedCondition, Observation, Step, StepResult, Target, Verb,
+  ActResult, Diagnosis, Element, ElementStateName, Expectation, FailedCondition, Observation, Step, StepResult, Target, TargetObject, Verb,
 } from "../protocol/types";
 import { captureScene, hitTest, type Scene, type SceneElement } from "../scene/snapshot";
 import { describeTarget, label, locate, publicElement, type Match } from "./locate";
@@ -38,7 +38,7 @@ export const lastStepPhases: Array<[string, number]> = [];
 /** How a field is named in observations, the same for typed and page-filled values: role:name. */
 const fieldLabel = (e: SceneElement) => `${e.role}:${e.name || e.selector}`;
 
-const VERBS: Verb[] = ["open", "click", "hover", "type", "press", "select", "upload", "scroll", "dialog", "viewport", "wait"];
+const VERBS: Verb[] = ["open", "click", "hover", "type", "press", "select", "upload", "drag", "scroll", "dialog", "viewport", "wait"];
 
 export function verbOf(step: Step): Verb {
   const verb = VERBS.find((v) => v in step);
@@ -176,7 +176,7 @@ async function perform(lane: LaneContext, step: Step, verb: Verb, scene: Scene):
     case "click":
     case "hover": {
       const target = (step as { click?: Target; hover?: Target })[verb]!;
-      const reached = await reach(lane, scene, target, verb === "click");
+      const reached = await reach(lane, scene, target, verb === "click", true);
       if (!reached.ok) return { ...reached, expectsEffect: false };
       const { x, y } = reached.point;
       await page.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
@@ -281,12 +281,39 @@ async function perform(lane: LaneContext, step: Step, verb: Verb, scene: Scene):
       return { ok: true, target: found.element, match: found.match, expectsEffect: false, fields: [{ target: fieldLabel(found.element), to: files.map((f) => f.split("/").pop()).join(", ") }] };
     }
 
+    case "drag": {
+      const [from, to] = (step as { drag: [Target, Target] }).drag;
+      const start = await reach(lane, scene, from, true, true);
+      if (!start.ok) return { ...start, expectsEffect: false };
+      // The drop point is where the pointer lets go; whatever is under it is
+      // the page's business (the dragged element itself, often), so it is not
+      // required to be uncovered, only on screen.
+      const now = await captureScene(page);
+      const end = await pointOf(lane, now, to);
+      if (!end.ok) return { ok: false, target: start.element, match: start.match, expectsEffect: false, diagnosis: end.diagnosis };
+      await dragBetween(page, start.point, end.point);
+      return { ok: true, target: start.element, match: start.match, expectsEffect: true };
+    }
+
     case "scroll": {
-      const value = (step as { scroll: Target | { by: { x: number; y: number } } }).scroll;
-      if (typeof value === "object" && "by" in value) {
-        const vp = scene.viewport;
-        await page.send("Input.dispatchMouseEvent", { type: "mouseWheel", x: vp.w / 2, y: vp.h / 2, deltaX: value.by.x, deltaY: value.by.y });
-        return { ok: true, expectsEffect: false };
+      const value = (step as { scroll: Target | { by: { x: number; y: number }; in?: Target } | { until: Target; in?: Target } }).scroll;
+      if (typeof value === "object" && ("by" in value || "until" in value)) {
+        // The wheel scrolls whatever is under the pointer, as it does for a
+        // person: the page, or a list inside it when "in" names one.
+        let at = { x: Math.round(scene.viewport.w / 2), y: Math.round(scene.viewport.h / 2) };
+        let container: SceneElement | undefined;
+        if (value.in !== undefined) {
+          const c = await pointOf(lane, scene, value.in);
+          if (!c.ok) return { ok: false, expectsEffect: false, diagnosis: c.diagnosis };
+          at = c.point;
+          container = c.element;
+        }
+        await page.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: at.x, y: at.y });
+        if ("by" in value) {
+          await page.send("Input.dispatchMouseEvent", { type: "mouseWheel", x: at.x, y: at.y, deltaX: value.by.x, deltaY: value.by.y });
+          return { ok: true, ...(container ? { target: container } : {}), expectsEffect: false };
+        }
+        return scrollUntil(lane, value.until, at, container);
       }
       const found = locate(scene, value as Target);
       if (!found.ok) return { ok: false, expectsEffect: false, diagnosis: found.diagnosis };
@@ -299,7 +326,10 @@ async function perform(lane: LaneContext, step: Step, verb: Verb, scene: Scene):
         else await callOn(page, node, "function (block) { this.scrollIntoView({ block, inline: 'nearest' }) }", [block]);
         const now = await captureScene(page);
         const e = now.elements.find((x) => x.backendNodeId === node);
-        if (!e?.bounds) break;
+        // A list that renders only its visible rows replaces them as it
+        // scrolls: the scroll happened, the old node is simply gone.
+        if (!e) return { ok: true, target: found.element, match: found.match, expectsEffect: false };
+        if (!e.bounds) break;
         const cx = Math.round(e.bounds.x + e.bounds.w / 2), cy = Math.round(e.bounds.y + e.bounds.h / 2);
         if (cx < 0 || cy < 0 || cx >= now.viewport.w || cy >= now.viewport.h) continue;
         const backendNodeId = await hitTest(page, now, cx, cy);
@@ -358,7 +388,8 @@ type Reached =
  * Where a person's click would land, and whether it would land on the element.
  * Offscreen elements are scrolled to first, as a person would.
  */
-export async function reach(lane: LaneContext, scene: Scene, target: Target, needsEnabled: boolean): Promise<Reached> {
+export async function reach(lane: LaneContext, scene: Scene, target: Target, needsEnabled: boolean, points = false): Promise<Reached> {
+  if (points && typeof target === "object" && target.x !== undefined) return reachPoint(lane, scene, target);
   const found = locate(scene, target);
   if (!found.ok) return found;
   let element = found.element;
@@ -451,6 +482,131 @@ export async function reach(lane: LaneContext, scene: Scene, target: Target, nee
     };
   }
   return { ok: false, target: element, match: found.match, diagnosis: { reason: "detached", hint: `${label(element)} went away while scrolling to it.` } };
+}
+
+
+// ---- points, dragging, scrolling until -----------------------------------------
+
+/**
+ * A point on the page: viewport pixels, or pixels from the top-left of an
+ * element. What is there is hit-tested and named, and a point inside an
+ * element must land on it, so a click on a canvas that something covers still
+ * says so.
+ */
+async function reachPoint(lane: LaneContext, scene: Scene, t: TargetObject): Promise<Reached> {
+  let point = { x: Math.round(t.x!), y: Math.round(t.y!) };
+  let within: SceneElement | undefined;
+  if (t.in !== undefined) {
+    let found = locate(scene, t.in);
+    if (!found.ok) return found;
+    within = found.element;
+    if (!within.visible || !within.bounds) return { ok: false, target: within, match: found.match, diagnosis: { reason: "hidden", hint: `${label(within)} is not visible, so there is no point in it to use.`, why: "display" } };
+    if (t.x! < 0 || t.y! < 0 || t.x! > within.bounds.w || t.y! > within.bounds.h)
+      return { ok: false, target: within, match: found.match, diagnosis: { reason: "not-found", hint: `(${t.x}, ${t.y}) is outside ${label(within)}, which is ${within.bounds.w}x${within.bounds.h}.`, didYouMean: [] } };
+    const inside = (b: { x: number; y: number }) => b.x + t.x! >= 0 && b.y + t.y! >= 0 && b.x + t.x! < scene.viewport.w && b.y + t.y! < scene.viewport.h;
+    if (!inside(within.bounds)) {
+      await callOn(lane.page, within.backendNodeId, "function (x, y) { const r = this.getBoundingClientRect(); window.scrollBy(r.left + x - innerWidth / 2, r.top + y - innerHeight / 2) }", [t.x!, t.y!]);
+      scene = await captureScene(lane.page);
+      found = locate(scene, t.in);
+      if (!found.ok || !found.element.bounds) return { ok: false, target: within, diagnosis: { reason: "detached", hint: `${label(within)} went away while scrolling to it.` } };
+      within = found.element;
+    }
+    point = { x: Math.round(within.bounds!.x + t.x!), y: Math.round(within.bounds!.y + t.y!) };
+  }
+  if (point.x < 0 || point.y < 0 || point.x >= scene.viewport.w || point.y >= scene.viewport.h)
+    return { ok: false, diagnosis: { reason: "offscreen", hint: `(${point.x}, ${point.y}) is outside the ${scene.viewport.w}x${scene.viewport.h} viewport.`, scrollable: true } };
+  const hit = await hitTest(lane.page, scene, point.x, point.y);
+  const there = hit === null ? within ?? null : coveringElement(scene, hit);
+  if (within && hit !== null && hit !== within.backendNodeId && !scene.ancestors(hit).includes(within.backendNodeId)) {
+    return {
+      ok: false, target: within, match: "exact",
+      diagnosis: { reason: "covered", hint: `(${t.x}, ${t.y}) in ${label(within)} is covered by ${there ? label(there) : "another element"}.`, blocker: there ? publicElement(there) : { ref: `e0.${hit}`, role: "generic", name: "" } },
+    };
+  }
+  const element = there ?? { ref: "", role: "generic", name: "", bounds: null, frames: [0], shadow: null, state: [], clickable: false, visible: true, selector: "", backendNodeId: -1 };
+  return { ok: true, element, match: "exact", point };
+}
+
+/** Where a target is on screen, for letting go of a drag or aiming the wheel: its centre, or the point itself. */
+async function pointOf(lane: LaneContext, scene: Scene, target: Target): Promise<{ ok: true; point: { x: number; y: number }; element?: SceneElement } | { ok: false; diagnosis: Diagnosis }> {
+  if (typeof target === "object" && target.x !== undefined) {
+    const r = await reachPoint(lane, scene, target);
+    return r.ok ? { ok: true, point: r.point, element: r.element } : { ok: false, diagnosis: r.diagnosis };
+  }
+  const found = locate(scene, target);
+  if (!found.ok) return found;
+  const b = found.element.bounds;
+  if (!found.element.visible || !b) return { ok: false, diagnosis: { reason: "hidden", hint: `${label(found.element)} is not visible.`, why: "display" } };
+  const x = Math.round(Math.max(0, b.x) + Math.min(b.w, scene.viewport.w - Math.max(0, b.x)) / 2);
+  const y = Math.round(Math.max(0, b.y) + Math.min(b.h, scene.viewport.h - Math.max(0, b.y)) / 2);
+  if (b.x + b.w <= 0 || b.y + b.h <= 0 || b.x >= scene.viewport.w || b.y >= scene.viewport.h)
+    return { ok: false, diagnosis: { reason: "offscreen", hint: `${label(found.element)} is not on screen; both ends of a drag must be.`, scrollable: true } };
+  return { ok: true, point: { x, y }, element: found.element };
+}
+
+/**
+ * Press, move with the button held, release: the way pointer-based drag
+ * libraries see a person drag. When the page starts a native HTML5 drag,
+ * Chromium hands it over and the drop is delivered as drag events.
+ */
+async function dragBetween(page: Page, from: { x: number; y: number }, to: { x: number; y: number }): Promise<void> {
+  let data: unknown = null;
+  const off = page.on("Input.dragIntercepted", (p) => { data = p.data; });
+  await page.send("Input.setInterceptDrags", { enabled: true }).catch(() => {});
+  try {
+    await page.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: from.x, y: from.y });
+    await page.send("Input.dispatchMouseEvent", { type: "mousePressed", x: from.x, y: from.y, button: "left", buttons: 1, clickCount: 1 });
+    const steps = 12;
+    for (let i = 1; i <= steps; i++) {
+      await page.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: from.x + ((to.x - from.x) * i) / steps, y: from.y + ((to.y - from.y) * i) / steps, button: "left", buttons: 1 });
+      await sleep(16);
+    }
+    if (data) {
+      for (const type of ["dragEnter", "dragOver", "drop"] as const)
+        await page.send("Input.dispatchDragEvent", { type, x: to.x, y: to.y, data: data as never });
+    }
+    await page.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: to.x, y: to.y, button: "left", buttons: 0, clickCount: 1 });
+  } finally {
+    off();
+    await page.send("Input.setInterceptDrags", { enabled: false }).catch(() => {});
+  }
+}
+
+/**
+ * Turn the wheel until the target is on the page: lists that render only the
+ * rows in view, feeds that load more at the bottom. Stops when the target
+ * appears, or when the wheel stops changing anything (the end).
+ */
+async function scrollUntil(lane: LaneContext, target: Target, at: { x: number; y: number }, container: SceneElement | undefined): Promise<Performed> {
+  const { page } = lane;
+  const height = container?.bounds ? container.bounds.h : (await captureScene(page)).viewport.h;
+  const delta = Math.max(40, Math.round(height * 0.8));
+  let still = 0, turns = 0, last = "";
+  for (; turns < 400; turns++) {
+    const scene = await captureScene(page);
+    const found = locate(scene, target);
+    const hit = found.ok ? found.element : found.diagnosis.reason === "ambiguous" ? scene.elements.find((e) => e.ref === found.diagnosis.candidates?.[0]?.ref) : undefined;
+    if (hit?.visible) {
+      await page.send("DOM.scrollIntoViewIfNeeded", { backendNodeId: hit.backendNodeId }).catch(() => {});
+      return { ok: true, target: hit, ...(found.ok ? { match: found.match } : {}), expectsEffect: false };
+    }
+    const where = container
+      ? await callOn(page, container.backendNodeId, "function () { return this.scrollTop + ':' + this.scrollHeight }").catch(() => "")
+      : await page.send("Runtime.evaluate", { expression: "scrollY + ':' + document.documentElement.scrollHeight", returnByValue: true }).then((r) => r.result.value, () => "");
+    const signature = `${where}|${scene.texts.length}|${scene.elements.length}`;
+    still = signature === last ? still + 1 : 0;
+    last = signature;
+    if (still >= 3) break;
+    await page.send("Input.dispatchMouseEvent", { type: "mouseWheel", x: at.x, y: at.y, deltaX: 0, deltaY: delta });
+    // Let a feed fetch its next page before judging that nothing changed.
+    const t0 = performance.now();
+    await sleep(80);
+    while (performance.now() - t0 < 3000 && lane.probe.busySince(t0 - 100) > 0) await sleep(50);
+  }
+  return {
+    ok: false, expectsEffect: false,
+    diagnosis: { reason: "not-found", hint: `Scrolled ${container ? label(container) : "the page"} ${turns} time(s) to the end; no ${describeTarget(target)} appeared.`, didYouMean: [] },
+  };
 }
 
 /** The most meaningful element at a hit point: a named ancestor if the hit itself is anonymous. */

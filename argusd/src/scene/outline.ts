@@ -13,7 +13,10 @@ const FIELDS = new Set(["textbox", "searchbox", "combobox", "checkbox", "radio",
 const ACTIONS = new Set(["button", "link", "menuitem", "tab", "option"]);
 
 export async function outline(page: Page, scene: Scene, budget = 250): Promise<{ outline: string; tokens: number }> {
-  const visible = scene.elements.filter((e) => e.visible);
+  // A checkbox or radio made transparent so a styled box can stand in for it
+  // is still the control a person uses: list it, and say how to reach it.
+  const transparent = (e: SceneElement) => e.hiddenBy === "opacity" && (e.role === "checkbox" || e.role === "radio") && !!e.bounds;
+  const visible = scene.elements.filter((e) => e.visible || transparent(e));
   const inView = (e: SceneElement) => !!e.bounds && e.bounds.y < scene.viewport.h && e.bounds.y + e.bounds.h > 0;
 
   const coveredBy = new Map<number, SceneElement | null>();
@@ -35,8 +38,28 @@ export async function outline(page: Page, scene: Scene, budget = 250): Promise<{
     }
   }
 
+  // Five "Delete" buttons are five different actions: name each by the row it
+  // sits in, the nearest text around it that is not its own.
+  const context = new Map<number, string>();
+  const byName = new Map<string, SceneElement[]>();
+  for (const e of visible.filter((x) => ACTIONS.has(x.role) || FIELDS.has(x.role))) {
+    const key = `${e.role}:${e.name || e.selector}`;
+    byName.set(key, [...(byName.get(key) ?? []), e]);
+  }
+  for (const group of byName.values()) {
+    if (group.length < 2) continue;
+    for (const e of group.slice(0, 30)) {
+      for (const up of scene.ancestors(e.backendNodeId).slice(1, 6)) {
+        const own = new Set([e.name, e.content].filter(Boolean));
+        const near = scene.texts.find((b) => !own.has(b.text) && b.backendNodeId !== e.backendNodeId && scene.ancestors(b.backendNodeId).includes(up) && !scene.ancestors(b.backendNodeId).includes(e.backendNodeId));
+        if (near) { context.set(e.backendNodeId, near.text.length > 40 ? `${near.text.slice(0, 39)}…` : near.text); break; }
+      }
+    }
+  }
+
   const tag = (e: SceneElement) => {
     const notes: string[] = [];
+    if (transparent(e)) notes.push("transparent: click it or its label");
     if (e.state.includes("disabled")) notes.push("disabled");
     if (e.state.includes("checked")) notes.push("checked");
     if (e.state.includes("required")) notes.push("required");
@@ -46,7 +69,7 @@ export async function outline(page: Page, scene: Scene, budget = 250): Promise<{
     if (coveredBy.has(e.backendNodeId)) notes.push(`covered by ${blocker ? blocker.ref + " " + (blocker.name || blocker.selector) : "another element"}`);
     return notes.length ? ` [${notes.join(", ")}]` : "";
   };
-  const line = (e: SceneElement, indent = "  ") => `${indent}${e.role}:${e.name || e.selector} ${e.ref}${tag(e)}`;
+  const line = (e: SceneElement, indent = "  ") => `${indent}${e.role}:${e.name || e.selector}${context.has(e.backendNodeId) ? ` (${context.get(e.backendNodeId)})` : ""} ${e.ref}${tag(e)}`;
 
   const lines: string[] = [];
   lines.push(`${scene.title || scene.url} (${scene.viewport.w}x${scene.viewport.h}${scene.documents > 1 ? `, ${scene.documents} documents` : ""})`);
@@ -57,6 +80,8 @@ export async function outline(page: Page, scene: Scene, budget = 250): Promise<{
     ["actions", visible.filter((e) => ACTIONS.has(e.role))
       // Blocked and in-view actions first: they are what the agent needs next.
       .sort((a, b) => Number(coveredBy.has(b.backendNodeId)) - Number(coveredBy.has(a.backendNodeId)) || Number(inView(b)) - Number(inView(a)))],
+    // Drawn surfaces have nothing inside to name: click them at a point.
+    ["canvases (no elements inside; click a point: {\"x\", \"y\", \"in\": ref})", visible.filter((e) => e.selector.startsWith("canvas") && !!e.bounds && e.bounds.w >= 40 && e.bounds.h >= 40)],
   ];
 
   const tokensOf = (s: string) => Math.ceil(s.length / 4);
@@ -64,12 +89,13 @@ export async function outline(page: Page, scene: Scene, budget = 250): Promise<{
   for (const [name, items] of sections) {
     if (!items.length) continue;
     const header = `${name}:`;
-    if (used + tokensOf(header) > budget) { lines.push(`… ${items.length} ${name} (scene.find)`); continue; }
+    if (used + tokensOf(header) > budget) { lines.push(`… ${items.length} ${name.split(" ")[0]} (scene.find)`); continue; }
     lines.push(header);
     used += tokensOf(header);
     let shown = 0;
     for (const e of items) {
-      const l = name === "headings" ? `  ${e.name} ${e.ref}`
+      const l = name.startsWith("canvases") ? `  ${e.selector} ${e.ref} ${e.bounds!.w}x${e.bounds!.h}`
+        : name === "headings" ? `  ${e.name} ${e.ref}`
         : name === "landmarks" ? `  ${e.role}${e.name ? ` "${e.name}"` : ""} ${e.ref}`
         : line(e);
       if (used + tokensOf(l) > budget - 8) break;
@@ -78,7 +104,7 @@ export async function outline(page: Page, scene: Scene, budget = 250): Promise<{
       shown++;
     }
     if (shown < items.length) {
-      const more = `  … ${items.length - shown} more ${name} (scene.find)`;
+      const more = `  … ${items.length - shown} more ${name.split(" ")[0]} (scene.find)`;
       lines.push(more);
       used += tokensOf(more);
     }

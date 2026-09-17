@@ -72,11 +72,17 @@ try {
       const shift = (round + i) % TOOLS.length;
       const order = [...TOOLS.slice(shift), ...TOOLS.slice(0, shift)];
       for (const tool of order) {
-        wb.reset();
-        const r = await runSession({
-          prompt: `${t.task(wb.base)}\n\n${SETUP[tool].intro} ${ENDING}`, model: MODEL, flags: SETUP[tool].flags,
-          cwd: join(work, "cwd"), transcript: join(work, `${tool}-${t.id}-${round}.jsonl`),
-        });
+        const transcript = join(work, `${tool}-${t.id}-${round}.jsonl`);
+        let r;
+        // A session whose browser tool never connected measured nothing: retry it, never score it.
+        for (let attempt = 1; ; attempt++) {
+          wb.reset();
+          r = await runSession({ prompt: `${t.task(wb.base)}\n\n${SETUP[tool].intro} ${ENDING}`, model: MODEL, flags: SETUP[tool].flags, cwd: join(work, "cwd"), transcript });
+          if (!readFileSync(transcript, "utf8").includes("Browser extension is not connected")) break;
+          console.error(`skip  ${tool} ${t.id} r${round}: the browser extension was not connected (attempt ${attempt})`);
+          if (attempt === 3) throw new Error(`${tool}: the browser extension is not connected; reconnect it and rerun`);
+          await Bun.sleep(30_000);
+        }
         await Bun.sleep(300);
         const { met, truth } = t.judge(r.answer, wb.state);
         const correct = t.possible ? met : r.claimed === "failure";

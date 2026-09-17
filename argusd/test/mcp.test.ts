@@ -113,7 +113,7 @@ describe("argusd mcp", () => {
     const image = r.content.find((c: any) => c.type === "image");
     expect(image.mimeType).toBe("image/png");
     expect(Buffer.from(image.data, "base64").subarray(1, 4).toString()).toBe("PNG");
-    expect(textOf(r)).toMatch(/\d+x\d+, \d+ image tokens/);
+    expect(textOf(r)).toMatch(/^\d+x\d+ at \(\d+, \d+\) in the viewport; .*, \d+ image tokens$/);
   }, 30_000);
 
   test("browser_check reviews the page", async () => {

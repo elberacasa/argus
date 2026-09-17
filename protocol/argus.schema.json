@@ -216,9 +216,13 @@
             "name": { "type": "string" },
             "text": { "type": "string", "minLength": 1 },
             "near": { "$ref": "#/$defs/Target" },
-            "nth": { "type": "integer", "minimum": 1 }
+            "nth": { "type": "integer", "minimum": 1 },
+            "x": { "type": "number", "description": "A point instead of an element: viewport CSS pixels, or pixels from the top-left of `in`. Needs y. Only click, hover and drag take points." },
+            "y": { "type": "number" },
+            "in": { "$ref": "#/$defs/Target", "description": "The element x and y are measured from." }
           },
-          "not": { "required": ["text", "role"] }
+          "not": { "required": ["text", "role"] },
+          "dependentRequired": { "x": ["y"], "y": ["x"], "in": ["x", "y"] }
     },
 
     "Step": {
@@ -239,7 +243,12 @@
         "press": { "type": "string", "pattern": "^((Control|Shift|Alt|Meta)\\+)*[^+]+$" },
         "select": { "type": "array", "prefixItems": [{ "$ref": "#/$defs/Target" }, { "type": "string" }], "minItems": 2, "maxItems": 2 },
         "upload": { "type": "array", "prefixItems": [{ "$ref": "#/$defs/Target" }], "items": { "type": "string", "minLength": 1 }, "minItems": 2 },
-        "scroll": { "oneOf": [{ "$ref": "#/$defs/Target" }, { "type": "object", "required": ["by"], "additionalProperties": false, "properties": { "by": { "type": "object", "required": ["x", "y"], "properties": { "x": { "type": "number" }, "y": { "type": "number" } } } } }] },
+        "drag": { "type": "array", "prefixItems": [{ "$ref": "#/$defs/Target" }, { "$ref": "#/$defs/Target" }], "minItems": 2, "maxItems": 2, "description": "Press on the first target, move to the second with the button held, release." },
+        "scroll": { "oneOf": [
+          { "$ref": "#/$defs/Target" },
+          { "type": "object", "required": ["by"], "additionalProperties": false, "properties": { "by": { "type": "object", "required": ["x", "y"], "properties": { "x": { "type": "number" }, "y": { "type": "number" } } }, "in": { "$ref": "#/$defs/Target" } } },
+          { "type": "object", "required": ["until"], "additionalProperties": false, "properties": { "until": { "$ref": "#/$defs/Target" }, "in": { "$ref": "#/$defs/Target" } }, "description": "Scroll, with the wheel, until the target is on the page: for lists that render only what is in view and pages that load more as you scroll." }
+        ] },
         "dialog": { "oneOf": [{ "enum": ["accept", "dismiss"] }, { "type": "object", "required": ["accept"], "additionalProperties": false, "properties": { "accept": { "type": "string" } } }] },
         "viewport": { "oneOf": [{ "const": "reset" }, { "$ref": "#/$defs/Viewport" }] },
         "wait": { "$ref": "#/$defs/Expectation" }
@@ -247,7 +256,7 @@
       "additionalProperties": false,
       "oneOf": [
         { "required": ["open"] }, { "required": ["click"] }, { "required": ["hover"] }, { "required": ["type"] },
-        { "required": ["press"] }, { "required": ["select"] }, { "required": ["upload"] }, { "required": ["scroll"] },
+        { "required": ["press"] }, { "required": ["select"] }, { "required": ["upload"] }, { "required": ["drag"] }, { "required": ["scroll"] },
         { "required": ["dialog"] }, { "required": ["viewport"] }, { "required": ["wait"] }
       ]
     },
@@ -377,6 +386,7 @@
         "w": { "type": "integer", "minimum": 1 },
         "h": { "type": "integer", "minimum": 1 },
         "tokens": { "type": "integer", "minimum": 1 },
+        "origin": { "type": "object", "required": ["x", "y"], "properties": { "x": { "type": "number" }, "y": { "type": "number" } }, "description": "Where the image's top-left pixel is in the viewport, in CSS pixels; one image pixel is one CSS pixel." },
         "regions": { "type": "array", "items": { "$ref": "#/$defs/Rect" } },
         "legend": { "type": "array" }
       }
@@ -387,7 +397,7 @@
       "properties": {
         "i": { "type": "integer", "minimum": 0 },
         "id": { "type": "string" },
-        "verb": { "enum": ["open", "click", "hover", "type", "press", "select", "upload", "scroll", "dialog", "viewport", "wait"] },
+        "verb": { "enum": ["open", "click", "hover", "type", "press", "select", "upload", "drag", "scroll", "dialog", "viewport", "wait"] },
         "ok": { "type": "boolean" },
         "target": { "$ref": "#/$defs/Element" },
         "match": { "enum": ["exact", "ci", "substring", "ref"] },

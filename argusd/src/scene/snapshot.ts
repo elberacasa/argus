@@ -38,6 +38,8 @@ export interface SceneElement {
   hiddenBy?: "display" | "visibility" | "opacity" | "zero-size";
   /** tag#id.class, for people reading a diagnosis. */
   selector: string;
+  /** Its visible text, when that differs from its name (a "›" button named "Next month"). */
+  content?: string;
   backendNodeId: number;
 }
 
@@ -218,6 +220,12 @@ export function buildScene(
     const place = (b: Rect | undefined): Rect | null =>
       b ? { x: Math.round(b.x + ox), y: Math.round(b.y + oy), w: Math.round(b.w), h: Math.round(b.h) } : null;
 
+    // aria-labelledby names a control by other elements' text.
+    const byId = new Map<string, number>();
+    names.forEach((_, n) => { if (types[n] === 1) { const id = attrs(n).get("id"); if (id && !byId.has(id)) byId.set(id, n); } });
+    const labelledBy = (a: Map<string, string>): string => (a.get("aria-labelledby") ?? "").split(/\s+/).filter(Boolean)
+      .map((id) => { const n = byId.get(id); return n === undefined ? "" : attrs(n).get("aria-label") || clean(textOf(n)); }).filter(Boolean).join(" ");
+
     // <label for=id> and wrapping labels name their controls.
     const labelFor = new Map<string, string>();
     names.forEach((nameIdx, n) => {
@@ -254,7 +262,8 @@ export function buildScene(
       const isField = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
       const id = a.get("id");
       const name = clean(
-        a.get("aria-label")
+        labelledBy(a)
+        || a.get("aria-label")
         || (id && labelFor.get(id))
         || (isField ? wrappingLabel(n) : "")
         || (isField || !NAME_FROM_CONTENT.has(role) ? "" : textOf(n))
@@ -282,6 +291,7 @@ export function buildScene(
       if (a.has("readonly") || a.get("aria-readonly") === "true") state.push("readonly");
 
       const shadow = shadowOf.get(n);
+      const content = !isField && NAME_FROM_CONTENT.has(role) ? clean(textOf(n)).slice(0, 80) : "";
       return {
         ref: `e${d}.${backend[n]}`,
         role,
@@ -294,6 +304,7 @@ export function buildScene(
         visible: hiddenBy === undefined,
         ...(hiddenBy ? { hiddenBy } : {}),
         selector: selectorOf(tag, a),
+        ...(content && content !== name ? { content } : {}),
         backendNodeId: backend[n] ?? -1,
       };
     };
@@ -305,7 +316,7 @@ export function buildScene(
       const a = attrs(n);
       const isLink = tag === "A" && a.has("href");
       const isInput = tag === "INPUT" && a.get("type") !== "hidden";
-      const interesting = clickable.has(n) || isLink || isInput || tag in IMPLICIT_ROLE || a.has("role")
+      const interesting = clickable.has(n) || isLink || isInput || tag in IMPLICIT_ROLE || a.has("role") || tag === "CANVAS"
         || (a.has("tabindex") && a.get("tabindex") !== "-1") || a.has("contenteditable");
       if (!interesting) return;
       const element = make(n);
